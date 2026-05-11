@@ -45,6 +45,8 @@ model ScreeningSession {
   averageTbProbability Float?    @map("average_tb_probability")
   uploadError          Boolean   @default(false) @map("upload_error")
   apiAttempt           String?   @map("api_attempt") @db.Text
+  /** Raw checklist JSON from the client ({ version, items:[{id,label,value}] }) — survives even when FK symptom rows are skipped */
+  checklistPayload     Json?     @map("checklist_payload")
 
   user             User              @relation(fields: [userId], references: [userId], onDelete: Cascade)
   symptomResponses SymptomResponse[]

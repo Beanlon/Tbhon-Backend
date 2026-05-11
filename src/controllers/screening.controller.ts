@@ -37,6 +37,20 @@ function parseJsonArrayOfStrings(raw: unknown): string[] {
   return [];
 }
 
+function parseChecklistPayloadRecord(body: Record<string, unknown>): Prisma.InputJsonValue | undefined {
+  let raw: unknown = body.checklist;
+  if (typeof raw === "string" && raw.trim().length > 0) {
+    try {
+      raw = JSON.parse(raw) as unknown;
+    } catch {
+      return undefined;
+    }
+  }
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  return raw as Prisma.InputJsonValue;
+}
+
 function parseChecklistItems(body: Record<string, unknown>): { id: string; value: boolean }[] {
   let raw: unknown = body.checklist;
   if (typeof raw === "string" && raw.trim().length > 0) {
@@ -54,7 +68,11 @@ function parseChecklistItems(body: Record<string, unknown>): { id: string; value
     if (!isRecord(item)) continue;
     const id = getString(item.id);
     if (!id) continue;
-    const value = item.value === true;
+    const value =
+      item.value === true ||
+      item.value === 1 ||
+      item.value === "1" ||
+      item.value === "true";
     out.push({ id, value });
   }
   return out;
@@ -137,6 +155,7 @@ export async function completeScreening(req: AuthRequest, res: Response) {
   const recommendation = rec ?? RISK_FALLBACK_REC[riskLevel];
 
   const checklistItems = parseChecklistItems(req.body);
+  const checklistPayload = parseChecklistPayloadRecord(req.body);
   const audioUris = parseJsonArrayOfStrings(req.body.audioUris);
   const imageUri = getString(req.body.imageUri);
   const uploadError = getBool(req.body.uploadError);
@@ -169,6 +188,7 @@ export async function completeScreening(req: AuthRequest, res: Response) {
             : null,
         uploadError,
         apiAttempt: apiAttemptRaw ?? null,
+        ...(checklistPayload !== undefined ? { checklistPayload } : {}),
         symptomResponses: {
           create: checklistItems
             .filter((x) => known.has(x.id))
