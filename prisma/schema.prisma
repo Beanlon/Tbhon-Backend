@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model User {
+  userId       String   @id @default(uuid()) @map("user_id") @db.VarChar(191)
+  email        String?  @unique @db.VarChar(255)
+  phoneNumber  String?  @map("phone_number") @db.VarChar(30)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  profile           UserProfile?
+  screeningSessions ScreeningSession[]
+
+  @@map("users")
+}
+
+model UserProfile {
+  profileId String   @id @default(uuid()) @map("profile_id") @db.VarChar(191)
+  userId    String   @unique @map("user_id") @db.VarChar(191)
+  firstName String   @map("first_name") @db.VarChar(100)
+  lastName  String   @map("last_name") @db.VarChar(100)
+  birthdate DateTime @db.Date
+  gender    String   @db.VarChar(30)
+  street    String?  @db.VarChar(255)
+  barangay  String?  @db.VarChar(100)
+  city      String?  @db.VarChar(100)
+
+  user User @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model ScreeningSession {
+  sessionId            String    @id @default(uuid()) @map("session_id") @db.VarChar(191)
+  userId               String    @map("user_id") @db.VarChar(191)
+  startedAt            DateTime  @default(now()) @map("started_at")
+  completedAt          DateTime? @map("completed_at")
+  finalRiskLevel       String?   @map("final_risk_level") @db.VarChar(50)
+  averageTbProbability Float?    @map("average_tb_probability")
+  uploadError          Boolean   @default(false) @map("upload_error")
+  apiAttempt           String?   @map("api_attempt") @db.Text
+
+  user             User              @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  symptomResponses SymptomResponse[]
+  coughRecordings  CoughRecording[]
+  sputumImage      SputumImage?
+  result           ScreeningResult?
+
+  @@index([userId])
+  @@map("screening_sessions")
+}
+
+model SymptomQuestion {
+  questionId   String  @id @default(uuid()) @map("question_id") @db.VarChar(191)
+  category     String  @db.VarChar(100)
+  questionText String  @map("question_text") @db.Text
+  subtext      String? @db.Text
+  version      Int     @default(1)
+
+  responses SymptomResponse[]
+
+  @@index([category])
+  @@map("symptom_questions")
+}
+
+model SymptomResponse {
+  responseId  String  @id @default(uuid()) @map("response_id") @db.VarChar(191)
+  sessionId   String  @map("session_id") @db.VarChar(191)
+  questionId  String  @map("question_id") @db.VarChar(191)
+  answerValue Boolean @map("answer_value")
+
+  session  ScreeningSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  question SymptomQuestion  @relation(fields: [questionId], references: [questionId], onDelete: Restrict)
+
+  @@unique([sessionId, questionId])
+  @@index([questionId])
+  @@map("symptom_responses")
+}
+
+model CoughRecording {
+  recordingId String   @id @default(uuid()) @map("recording_id") @db.VarChar(191)
+  sessionId   String   @map("session_id") @db.VarChar(191)
+  fileUri     String   @map("file_uri") @db.Text
+  mimeType    String   @map("mime_type") @db.VarChar(100)
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+
+  session         ScreeningSession   @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  qualityCheck    CoughQualityCheck?
+  audioPrediction TbAudioPrediction?
+
+  @@index([sessionId])
+  @@map("cough_recordings")
+}
+
+model CoughQualityCheck {
+  qualityCheckId String  @id @default(uuid()) @map("quality_check_id") @db.VarChar(191)
+  recordingId    String  @unique @map("recording_id") @db.VarChar(191)
+  ok             Boolean
+  label          String? @db.VarChar(100)
+  reasonsJson    Json?   @map("reasons_json")
+
+  recording CoughRecording @relation(fields: [recordingId], references: [recordingId], onDelete: Cascade)
+
+  @@map("cough_quality_checks")
+}
+
+model TbAudioPrediction {
+  predictionId   String   @id @default(uuid()) @map("prediction_id") @db.VarChar(191)
+  recordingId    String   @unique @map("recording_id") @db.VarChar(191)
+  spoof          Boolean  @default(false)
+  probNoTb       Float    @map("prob_no_tb")
+  probTb         Float    @map("prob_tb")
+  predictedClass Int      @map("predicted_class")
+  modelPath      String?  @map("model_path") @db.Text
+  predictedAt    DateTime @default(now()) @map("predicted_at")
+
+  recording CoughRecording @relation(fields: [recordingId], references: [recordingId], onDelete: Cascade)
+
+  @@map("tb_audio_predictions")
+}
+
+model SputumImage {
+  imageId    String   @id @default(uuid()) @map("image_id") @db.VarChar(191)
+  sessionId  String   @unique @map("session_id") @db.VarChar(191)
+  fileUri    String   @map("file_uri") @db.Text
+  mimeType   String   @map("mime_type") @db.VarChar(100)
+  capturedAt DateTime @default(now()) @map("captured_at")
+
+  session          ScreeningSession  @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+  phlegmPrediction PhlegmPrediction?
+
+  @@map("sputum_images")
+}
+
+model PhlegmPrediction {
+  phlegmPredictionId String   @id @default(uuid()) @map("phlegm_prediction_id") @db.VarChar(191)
+  imageId            String   @unique @map("image_id") @db.VarChar(191)
+  predictedLoad      String   @map("predicted_load") @db.VarChar(100)
+  confidence         Float
+  probabilitiesJson  Json?    @map("probabilities_json")
+  checkpoint         String?  @db.Text
+  predictedAt        DateTime @default(now()) @map("predicted_at")
+
+  image SputumImage @relation(fields: [imageId], references: [imageId], onDelete: Cascade)
+
+  @@map("phlegm_predictions")
+}
+
+model ScreeningResult {
+  resultId                String   @id @default(uuid()) @map("result_id") @db.VarChar(191)
+  sessionId               String   @unique @map("session_id") @db.VarChar(191)
+  riskLevel               String   @map("risk_level") @db.VarChar(50)
+  recommendation          String   @db.Text
+  invalidAudio            Boolean  @default(false) @map("invalid_audio")
+  invalidAudioLabel       String?  @map("invalid_audio_label") @db.VarChar(100)
+  invalidAudioReasonsJson Json?    @map("invalid_audio_reasons_json")
+  createdAt               DateTime @default(now()) @map("created_at")
+
+  session ScreeningSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
+
+  @@map("screening_results")
+}
