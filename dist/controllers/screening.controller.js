@@ -34,6 +34,22 @@ function parseJsonArrayOfStrings(raw) {
     }
     return [];
 }
+function parseChecklistPayloadRecord(body) {
+    let raw = body.checklist;
+    if (typeof raw === "string" && raw.trim().length > 0) {
+        try {
+            raw = JSON.parse(raw);
+        }
+        catch {
+            return undefined;
+        }
+    }
+    if (raw === undefined || raw === null)
+        return undefined;
+    if (typeof raw !== "object" || Array.isArray(raw))
+        return undefined;
+    return raw;
+}
 function parseChecklistItems(body) {
     let raw = body.checklist;
     if (typeof raw === "string" && raw.trim().length > 0) {
@@ -56,7 +72,10 @@ function parseChecklistItems(body) {
         const id = (0, http_1.getString)(item.id);
         if (!id)
             continue;
-        const value = item.value === true;
+        const value = item.value === true ||
+            item.value === 1 ||
+            item.value === "1" ||
+            item.value === "true";
         out.push({ id, value });
     }
     return out;
@@ -148,6 +167,7 @@ async function completeScreening(req, res) {
     const rec = (0, http_1.getString)(req.body.recommendation);
     const recommendation = rec ?? RISK_FALLBACK_REC[riskLevel];
     const checklistItems = parseChecklistItems(req.body);
+    const checklistPayload = parseChecklistPayloadRecord(req.body);
     const audioUris = parseJsonArrayOfStrings(req.body.audioUris);
     const imageUri = (0, http_1.getString)(req.body.imageUri);
     const uploadError = getBool(req.body.uploadError);
@@ -175,6 +195,7 @@ async function completeScreening(req, res) {
                     : null,
                 uploadError,
                 apiAttempt: apiAttemptRaw ?? null,
+                ...(checklistPayload !== undefined ? { checklistPayload } : {}),
                 symptomResponses: {
                     create: checklistItems
                         .filter((x) => known.has(x.id))
@@ -278,8 +299,8 @@ async function listMyScreenings(req, res) {
     const limitRaw = (0, http_1.getString)(req.query.limit);
     const limit = Math.min(100, Math.max(1, Number(limitRaw ?? "50") || 50));
     const rows = await prisma_1.prisma.screeningSession.findMany({
-        where: { userId },
-        orderBy: { startedAt: "desc" },
+        where: { userId, completedAt: { not: null } },
+        orderBy: { completedAt: "desc" },
         take: limit,
         select: {
             sessionId: true,
