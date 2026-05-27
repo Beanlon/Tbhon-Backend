@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
+import { parseDeviceCommand, queueDeviceCommand, resolveOrCreateSession } from "./iot.controller";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -144,6 +145,59 @@ function inferMime(uri: string, fallbackAudio: string, fallbackImage: string): s
   return fallbackAudio;
 }
 
+function isPhoneLocalMediaUri(uri: string): boolean {
+  const lower = uri.toLowerCase();
+  return lower.startsWith("file://") || lower.startsWith("content://");
+}
+
+/** POST /screenings/draft — open session before IoT sample / screening finish. */
+export async function createDraftScreening(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = randomUUID();
+  await prisma.screeningSession.create({
+    data: {
+      sessionId,
+      userId,
+      startedAt: new Date(),
+      apiAttempt: "mobile-draft",
+    },
+  });
+  res.status(201).json({ ok: true, sessionId });
+}
+
+/** POST /screenings/iot/request-capture — queue image/audio for ESP32 (JWT, no IoT key on phone). */
+export async function requestIotCapture(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  if (!isRecord(req.body)) {
+    throw new HttpError(400, "Request body is required");
+  }
+  const command = parseDeviceCommand(req.body.command) ?? parseDeviceCommand(req.body.type);
+  if (!command || command === "audio upload") {
+    throw new HttpError(400, "command must be `image` or `audio`");
+  }
+
+  const sessionId = getString(req.body.sessionId);
+  if (sessionId) {
+    const owned = await prisma.screeningSession.findFirst({
+      where: { sessionId, userId },
+      select: { sessionId: true, result: { select: { resultId: true } } },
+    });
+    if (!owned) throw new HttpError(404, "Screening session not found");
+    if (owned.result) throw new HttpError(409, "Screening already completed");
+  }
+
+  if (sessionId) {
+    await resolveOrCreateSession({ userId, sessionId });
+  }
+
+  const queued = queueDeviceCommand(
+    command,
+    { source: "mobile", byIp: req.ip ?? "unknown" },
+    sessionId ? { userId, sessionId } : undefined,
+  );
+  res.status(201).json({ ok: true, ...queued, sessionId: sessionId ?? null });
+}
+
 export async function completeScreening(req: AuthRequest, res: Response) {
   const userId = authenticatedUserId(req);
   if (!isRecord(req.body)) {
@@ -170,36 +224,73 @@ export async function completeScreening(req: AuthRequest, res: Response) {
   const phlegmConfidence = getOptionalNumber(req.body.phlegmConfidence);
   const phlegmProbs = parsePhlegmProbs(req.body.phlegmProbs);
 
-  const sessionId = randomUUID();
+  const draftSessionId = getString(req.body.sessionId);
+  let sessionId: string;
+  let completingDraft = false;
+
+  if (draftSessionId) {
+    const draft = await prisma.screeningSession.findFirst({
+      where: { sessionId: draftSessionId, userId },
+      include: { result: { select: { resultId: true } } },
+    });
+    if (!draft) throw new HttpError(404, "Screening session not found");
+    if (draft.result) throw new HttpError(409, "Screening already completed");
+    sessionId = draft.sessionId;
+    completingDraft = true;
+  } else {
+    sessionId = randomUUID();
+  }
 
   await prisma.$transaction(async (tx) => {
     const knownQuestions = await tx.symptomQuestion.findMany({ select: { questionId: true } });
     const known = new Set(knownQuestions.map((q) => q.questionId));
+    const symptomCreates = checklistItems
+      .filter((x) => known.has(x.id))
+      .map((x) => ({
+        responseId: randomUUID(),
+        questionId: x.id,
+        answerValue: x.value,
+      }));
 
-    await tx.screeningSession.create({
-      data: {
-        sessionId,
-        userId,
-        completedAt: new Date(),
-        finalRiskLevel: riskLevel,
-        averageTbProbability:
-          averageTbProbability !== null && averageTbProbability !== undefined
-            ? averageTbProbability
-            : null,
-        uploadError,
-        apiAttempt: apiAttemptRaw ?? null,
-        ...(checklistPayload !== undefined ? { checklistPayload } : {}),
-        symptomResponses: {
-          create: checklistItems
-            .filter((x) => known.has(x.id))
-            .map((x) => ({
-              responseId: randomUUID(),
-              questionId: x.id,
-              answerValue: x.value,
-            })),
+    if (completingDraft) {
+      await tx.screeningSession.update({
+        where: { sessionId },
+        data: {
+          completedAt: new Date(),
+          finalRiskLevel: riskLevel,
+          averageTbProbability:
+            averageTbProbability !== null && averageTbProbability !== undefined
+              ? averageTbProbability
+              : null,
+          uploadError,
+          apiAttempt: apiAttemptRaw ?? "mobile-draft",
+          ...(checklistPayload !== undefined ? { checklistPayload } : {}),
         },
-      },
-    });
+      });
+      await tx.symptomResponse.deleteMany({ where: { sessionId } });
+      if (symptomCreates.length > 0) {
+        await tx.symptomResponse.createMany({
+          data: symptomCreates.map((s) => ({ ...s, sessionId })),
+        });
+      }
+    } else {
+      await tx.screeningSession.create({
+        data: {
+          sessionId,
+          userId,
+          completedAt: new Date(),
+          finalRiskLevel: riskLevel,
+          averageTbProbability:
+            averageTbProbability !== null && averageTbProbability !== undefined
+              ? averageTbProbability
+              : null,
+          uploadError,
+          apiAttempt: apiAttemptRaw ?? null,
+          ...(checklistPayload !== undefined ? { checklistPayload } : {}),
+          symptomResponses: { create: symptomCreates },
+        },
+      });
+    }
 
     const recordingIds: string[] = [];
     for (const uri of audioUris) {
@@ -251,32 +342,51 @@ export async function completeScreening(req: AuthRequest, res: Response) {
       }
     }
 
-    if (imageUri && imageUri.length > 0) {
-      const imageId = randomUUID();
-      await tx.sputumImage.create({
-        data: {
-          imageId,
-          sessionId,
-          // `file_uri` is now nullable; see note in cough_recordings above.
-          fileUri: imageUri,
-          mimeType: inferMime(imageUri, "audio/wav", "image/jpeg"),
-          source: "mobile",
-        },
-      });
+    const existingSputum = await tx.sputumImage.findUnique({
+      where: { sessionId },
+      select: { imageId: true, byteSize: true, source: true },
+    });
 
-      if (phlegmAnalyzed && phlegmLoad.length > 0) {
-        const conf = phlegmConfidence !== null ? phlegmConfidence : 0;
-        await tx.phlegmPrediction.create({
+    let imageIdForPhlegm: string | null = existingSputum?.imageId ?? null;
+
+    if (imageUri && imageUri.length > 0 && isPhoneLocalMediaUri(imageUri)) {
+      const mimeType = inferMime(imageUri, "audio/wav", "image/jpeg");
+      if (existingSputum) {
+        await tx.sputumImage.update({
+          where: { sessionId },
           data: {
-            phlegmPredictionId: randomUUID(),
-            imageId,
-            predictedLoad: phlegmLoad,
-            confidence: conf,
-            ...(phlegmProbs !== undefined ? { probabilitiesJson: phlegmProbs } : {}),
-            checkpoint: null,
+            fileUri: imageUri,
+            mimeType,
+            source: "mobile",
+          },
+        });
+      } else {
+        imageIdForPhlegm = randomUUID();
+        await tx.sputumImage.create({
+          data: {
+            imageId: imageIdForPhlegm,
+            sessionId,
+            fileUri: imageUri,
+            mimeType,
+            source: "mobile",
           },
         });
       }
+    }
+
+    if (imageIdForPhlegm && phlegmAnalyzed && phlegmLoad.length > 0) {
+      await tx.phlegmPrediction.deleteMany({ where: { imageId: imageIdForPhlegm } });
+      const conf = phlegmConfidence !== null ? phlegmConfidence : 0;
+      await tx.phlegmPrediction.create({
+        data: {
+          phlegmPredictionId: randomUUID(),
+          imageId: imageIdForPhlegm,
+          predictedLoad: phlegmLoad,
+          confidence: conf,
+          ...(phlegmProbs !== undefined ? { probabilitiesJson: phlegmProbs } : {}),
+          checkpoint: null,
+        },
+      });
     }
 
     await tx.screeningResult.create({

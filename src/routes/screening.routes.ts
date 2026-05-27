@@ -1,5 +1,11 @@
 import { Router } from "express";
-import { completeScreening, getMyScreening, listMyScreenings } from "../controllers/screening.controller";
+import {
+  completeScreening,
+  createDraftScreening,
+  getMyScreening,
+  listMyScreenings,
+  requestIotCapture,
+} from "../controllers/screening.controller";
 import {
   attachCoughRecordingRaw,
   attachSputumImageRaw,
@@ -14,6 +20,8 @@ import { upload } from "../utils/upload";
 export const screeningRouter = Router();
 
 screeningRouter.post("/", requireAuth, completeScreening);
+screeningRouter.post("/draft", requireAuth, createDraftScreening);
+screeningRouter.post("/iot/request-capture", requireAuth, requestIotCapture);
 screeningRouter.get("/", requireAuth, listMyScreenings);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 

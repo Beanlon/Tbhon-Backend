@@ -407,6 +407,17 @@ export const openApiSpec = {
             description:
               "`audio` starts recording. `audio upload` asks the firmware to stop and upload, and is only accepted after the 3 second minimum has passed.",
           },
+          userId: {
+            type: "string",
+            format: "uuid",
+            description:
+              "Optional. When sent with `sessionId`, the queued GET body is JSON so the device can attach uploads to the mobile screening.",
+          },
+          sessionId: {
+            type: "string",
+            format: "uuid",
+            description: "Optional. Must be sent together with `userId`.",
+          },
         },
       },
     },
@@ -967,7 +978,7 @@ export const openApiSpec = {
         tags: ["IoT"],
         summary: "Fetch next command as plain text for firmware",
         description:
-          "ESP32-friendly polling endpoint. Returns plain text body: `image`, `audio`, `audio upload`, or empty string when no command is queued. By default it consumes the queued command on read.",
+          "ESP32-friendly polling endpoint. Returns plain text: legacy `image` / `audio` / `audio upload`, or one-line JSON `{\"command\":\"image\",\"userId\":\"...\",\"sessionId\":\"...\"}` when the queue POST included both ids. Empty string when nothing is queued. Consumes the command by default.",
         security: [{ iotKey: [] }],
         parameters: [
           {

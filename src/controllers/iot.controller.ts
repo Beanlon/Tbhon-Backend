@@ -24,11 +24,31 @@ type DeviceCommandType = "image" | "audio" | "audio upload";
 const AUDIO_MIN_SECONDS = 3;
 const AUDIO_MAX_SECONDS = 10;
 
+type DeviceCommandSource = "device-command" | "trigger" | "mobile";
+
+export type DeviceCommandContext = {
+  userId?: string;
+  sessionId?: string;
+};
+
 type DeviceCommandState = {
   command: DeviceCommandType;
   queuedAt: string;
-  source: "device-command" | "trigger";
+  source: DeviceCommandSource;
   byIp: string;
+  userId?: string;
+  sessionId?: string;
+};
+
+export type QueueDeviceCommandResult = {
+  command: DeviceCommandType;
+  message: string;
+  minSeconds: number | null;
+  maxSeconds: number | null;
+  queuedAt: string;
+  source: DeviceCommandSource;
+  userId: string | null;
+  sessionId: string | null;
 };
 
 type ActiveAudioCapture = {
@@ -43,7 +63,7 @@ function bodyOf(req: Request): Body {
   return isRecord(req.body) ? (req.body as Body) : {};
 }
 
-function parseDeviceCommand(raw: unknown): DeviceCommandType | null {
+export function parseDeviceCommand(raw: unknown): DeviceCommandType | null {
   if (typeof raw !== "string") return null;
   const normalized = raw.trim().toLowerCase();
   if (normalized === "image") return "image";
@@ -78,8 +98,75 @@ function assertAudioUploadAllowed() {
   }
 }
 
+/**
+ * Plain-text body for GET /iot/device-command.
+ * Legacy: `image` | `audio` | `audio upload`
+ * With app context: one-line JSON, e.g. {"command":"image","userId":"...","sessionId":"..."}
+ */
 function formatDeviceCommandForFirmware(command: DeviceCommandState): string {
+  if (command.userId || command.sessionId) {
+    return JSON.stringify({
+      command: command.command,
+      queuedAt: command.queuedAt,
+      ...(command.userId ? { userId: command.userId } : {}),
+      ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+    });
+  }
   return command.command;
+}
+
+/** Drop a pending `image` command after the device uploaded for that session. */
+export function clearPendingImageCommandForSession(sessionId: string) {
+  if (
+    pendingDeviceCommand?.command === "image" &&
+    pendingDeviceCommand.sessionId === sessionId
+  ) {
+    pendingDeviceCommand = null;
+  }
+}
+
+function readDeviceCommandContext(body: Body): DeviceCommandContext {
+  const userId = getString(body.userId);
+  const sessionId = getString(body.sessionId);
+  if ((userId && !sessionId) || (!userId && sessionId)) {
+    throw new HttpError(400, "userId and sessionId must be sent together");
+  }
+  if (userId && sessionId) {
+    return { userId, sessionId };
+  }
+  return {};
+}
+
+/** Shared queue used by /iot/device-command, /iot/trigger, and the mobile JWT route. */
+export function queueDeviceCommand(
+  command: DeviceCommandType,
+  meta: { source: DeviceCommandSource; byIp?: string },
+  context?: DeviceCommandContext,
+): QueueDeviceCommandResult {
+  if (command === "audio upload") {
+    assertAudioUploadAllowed();
+  }
+
+  const queued: DeviceCommandState = {
+    command,
+    queuedAt: new Date().toISOString(),
+    source: meta.source,
+    byIp: meta.byIp ?? "unknown",
+    ...(context?.userId ? { userId: context.userId } : {}),
+    ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+  };
+  pendingDeviceCommand = queued;
+
+  return {
+    command: queued.command,
+    message: `Queued '${queued.command}' command for device`,
+    minSeconds: queued.command === "audio" ? AUDIO_MIN_SECONDS : null,
+    maxSeconds: queued.command === "audio" ? AUDIO_MAX_SECONDS : null,
+    queuedAt: queued.queuedAt,
+    source: queued.source,
+    userId: queued.userId ?? null,
+    sessionId: queued.sessionId ?? null,
+  };
 }
 
 function getSingleValue(raw: unknown): string | undefined {
@@ -102,7 +189,7 @@ function imageFilenameExt(mimeType: string | null): string {
   return "bin";
 }
 
-async function resolveOrCreateSession(args: {
+export async function resolveOrCreateSession(args: {
   userId: string;
   sessionId?: string | undefined;
 }): Promise<string> {
@@ -210,6 +297,7 @@ export async function iotUploadSputum(req: Request, res: Response) {
         rawData: toBytes(file.buffer),
         byteSize: file.buffer.length,
         source: "iot",
+        capturedAt: new Date(),
       },
     });
   } else {
@@ -225,6 +313,8 @@ export async function iotUploadSputum(req: Request, res: Response) {
       },
     });
   }
+
+  clearPendingImageCommandForSession(resolvedSessionId);
 
   res.status(201).json({
     ok: true,
@@ -265,7 +355,7 @@ export function iotHello(req: Request, res: Response) {
 }
 
 /** POST /iot/device-command */
-export function iotDeviceCommand(req: Request, res: Response) {
+export async function iotDeviceCommand(req: Request, res: Response) {
   const body = bodyOf(req);
   const command =
     parseDeviceCommand(body.command) ??
@@ -275,42 +365,40 @@ export function iotDeviceCommand(req: Request, res: Response) {
   if (!command) {
     throw new HttpError(400, "command is required and must be `image`, `audio`, or `audio upload`");
   }
-  if (command === "audio upload") {
-    assertAudioUploadAllowed();
+
+  const context = readDeviceCommandContext(body);
+  if (context.userId && context.sessionId) {
+    await resolveOrCreateSession({ userId: context.userId, sessionId: context.sessionId });
   }
 
-  const queued: DeviceCommandState = {
+  const queued = queueDeviceCommand(
     command,
-    queuedAt: new Date().toISOString(),
-    source: "device-command",
-    byIp: req.ip ?? "unknown",
-  };
-  pendingDeviceCommand = queued;
+    {
+      source: "device-command",
+      byIp: req.ip ?? "unknown",
+    },
+    context,
+  );
 
-  res.status(201).json({
-    ok: true,
-    message: `Queued '${formatDeviceCommandForFirmware(queued)}' command for device`,
-    command: queued.command,
-    minSeconds: queued.command === "audio" ? AUDIO_MIN_SECONDS : null,
-    maxSeconds: queued.command === "audio" ? AUDIO_MAX_SECONDS : null,
-    queuedAt: queued.queuedAt,
-  });
+  res.status(201).json({ ok: true, ...queued });
 }
 
 /** GET /iot/device-command */
 export function iotGetDeviceCommand(req: Request, res: Response) {
   const current = pendingDeviceCommand;
   const shouldConsume = getConsumeQueryValue(req);
-  if (shouldConsume) {
-    if (current === pendingDeviceCommand) {
+  if (shouldConsume && current) {
+    // Keep `image` in the queue until upload or a new POST replaces it — avoids
+    // "NO COMMAND" on the next poll while the device is still capturing/uploading.
+    if (current.command !== "image" && current === pendingDeviceCommand) {
       pendingDeviceCommand = null;
     }
-    if (current?.command === "audio") {
+    if (current.command === "audio") {
       activeAudioCapture = {
         startedAtMs: Date.now(),
         minSeconds: AUDIO_MIN_SECONDS,
       };
-    } else if (current?.command === "audio upload") {
+    } else if (current.command === "audio upload") {
       activeAudioCapture = null;
     }
   }
@@ -321,7 +409,7 @@ export function iotGetDeviceCommand(req: Request, res: Response) {
 }
 
 /** POST /iot/trigger */
-export function iotSetTrigger(req: Request, res: Response) {
+export async function iotSetTrigger(req: Request, res: Response) {
   const body = bodyOf(req);
   const command =
     parseDeviceCommand(body.command) ??
@@ -331,26 +419,22 @@ export function iotSetTrigger(req: Request, res: Response) {
   if (!command) {
     throw new HttpError(400, "command is required and must be `image`, `audio`, or `audio upload`");
   }
-  if (command === "audio upload") {
-    assertAudioUploadAllowed();
+
+  const context = readDeviceCommandContext(body);
+  if (context.userId && context.sessionId) {
+    await resolveOrCreateSession({ userId: context.userId, sessionId: context.sessionId });
   }
 
-  const queued: DeviceCommandState = {
+  const queued = queueDeviceCommand(
     command,
-    queuedAt: new Date().toISOString(),
-    source: "trigger",
-    byIp: req.ip ?? "unknown",
-  };
-  pendingDeviceCommand = queued;
+    {
+      source: "trigger",
+      byIp: req.ip ?? "unknown",
+    },
+    context,
+  );
 
-  res.status(201).json({
-    ok: true,
-    command: queued.command,
-    minSeconds: queued.command === "audio" ? AUDIO_MIN_SECONDS : null,
-    maxSeconds: queued.command === "audio" ? AUDIO_MAX_SECONDS : null,
-    queuedAt: queued.queuedAt,
-    source: queued.source,
-  });
+  res.status(201).json({ ok: true, ...queued });
 }
 
 /** GET /iot/trigger */
@@ -366,7 +450,7 @@ export function iotGetTrigger(req: Request, res: Response) {
   }
 
   if (getConsumeQueryValue(req)) {
-    if (current === pendingDeviceCommand) {
+    if (current.command !== "image" && current === pendingDeviceCommand) {
       pendingDeviceCommand = null;
     }
     if (current.command === "audio") {
@@ -383,6 +467,8 @@ export function iotGetTrigger(req: Request, res: Response) {
     ok: true,
     pending: true,
     command: current.command,
+    userId: current.userId ?? null,
+    sessionId: current.sessionId ?? null,
     minSeconds: current.command === "audio" ? AUDIO_MIN_SECONDS : null,
     maxSeconds: current.command === "audio" ? AUDIO_MAX_SECONDS : null,
     firmwareCommand: formatDeviceCommandForFirmware(current),
