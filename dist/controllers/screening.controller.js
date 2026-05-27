@@ -215,8 +215,13 @@ async function completeScreening(req, res) {
                 data: {
                     recordingId,
                     sessionId,
+                    // `file_uri` is now nullable; we keep the original phone-local path
+                    // here purely for diagnostics. The real audio is uploaded separately
+                    // via POST /screenings/:sessionId/cough-recordings so the bytes live
+                    // on the server and any signed-in device can play them.
                     fileUri: uri,
                     mimeType: inferMime(uri, "audio/wav", "image/jpeg"),
+                    source: "mobile",
                 },
             });
         }
@@ -255,8 +260,10 @@ async function completeScreening(req, res) {
                 data: {
                     imageId,
                     sessionId,
+                    // `file_uri` is now nullable; see note in cough_recordings above.
                     fileUri: imageUri,
                     mimeType: inferMime(imageUri, "audio/wav", "image/jpeg"),
+                    source: "mobile",
                 },
             });
             if (phlegmAnalyzed && phlegmLoad.length > 0) {
@@ -289,9 +296,23 @@ async function completeScreening(req, res) {
         where: { sessionId },
         include: {
             result: true,
+            coughRecordings: {
+                select: {
+                    recordingId: true,
+                    mimeType: true,
+                    recordedAt: true,
+                    byteSize: true,
+                },
+                orderBy: { recordedAt: "asc" },
+            },
+            sputumImage: {
+                select: { imageId: true, mimeType: true, byteSize: true },
+            },
             _count: { select: { coughRecordings: true, symptomResponses: true } },
         },
     });
+    // Mobile clients use the returned recordingIds / imageId to attach the
+    // actual raw bytes via `/screenings/:sessionId/(cough-recordings/:id|sputum-image)/raw`.
     res.status(201).json({ session });
 }
 async function listMyScreenings(req, res) {
@@ -336,19 +357,56 @@ async function getMyScreening(req, res) {
                 include: { question: { select: { questionId: true, category: true, questionText: true } } },
             },
             coughRecordings: {
-                include: {
+                select: {
+                    recordingId: true,
+                    sessionId: true,
+                    fileUri: true,
+                    mimeType: true,
+                    recordedAt: true,
+                    byteSize: true,
+                    source: true,
                     qualityCheck: true,
                     audioPrediction: true,
                 },
             },
             sputumImage: {
-                include: { phlegmPrediction: true },
+                select: {
+                    imageId: true,
+                    sessionId: true,
+                    fileUri: true,
+                    mimeType: true,
+                    capturedAt: true,
+                    byteSize: true,
+                    source: true,
+                    phlegmPrediction: true,
+                },
             },
         },
     });
     if (!session) {
         throw new http_1.HttpError(404, "Screening not found");
     }
-    res.json({ session });
+    // Annotate each media row with a canonical, server-served URL so any device
+    // on this account can fetch the original bytes regardless of where they
+    // were recorded. The mobile app appends the API base + bearer token.
+    const coughRecordings = session.coughRecordings.map((r) => ({
+        ...r,
+        hasRawData: typeof r.byteSize === "number" && r.byteSize > 0,
+        fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/cough-recordings/${encodeURIComponent(r.recordingId)}/file`,
+    }));
+    const sputumImage = session.sputumImage
+        ? {
+            ...session.sputumImage,
+            hasRawData: typeof session.sputumImage.byteSize === "number" && session.sputumImage.byteSize > 0,
+            fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/sputum-image/file`,
+        }
+        : null;
+    res.json({
+        session: {
+            ...session,
+            coughRecordings,
+            sputumImage,
+        },
+    });
 }
 //# sourceMappingURL=screening.controller.js.map

@@ -88,9 +88,15 @@ model SymptomResponse {
 model CoughRecording {
   recordingId String   @id @default(uuid()) @map("recording_id") @db.VarChar(191)
   sessionId   String   @map("session_id") @db.VarChar(191)
-  fileUri     String   @map("file_uri") @db.Text
+  fileUri     String?  @map("file_uri") @db.Text
   mimeType    String   @map("mime_type") @db.VarChar(100)
   recordedAt  DateTime @default(now()) @map("recorded_at")
+
+  /** Raw audio bytes stored server-side so any device on the same account can replay the original recording. */
+  rawData  Bytes? @map("raw_data")
+  byteSize Int?   @map("byte_size")
+  /** Where the upload originated: "mobile" | "iot" | "unknown". */
+  source   String @default("mobile") @map("source") @db.VarChar(50)
 
   session         ScreeningSession   @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
   qualityCheck    CoughQualityCheck?
@@ -130,9 +136,15 @@ model TbAudioPrediction {
 model SputumImage {
   imageId    String   @id @default(uuid()) @map("image_id") @db.VarChar(191)
   sessionId  String   @unique @map("session_id") @db.VarChar(191)
-  fileUri    String   @map("file_uri") @db.Text
+  fileUri    String?  @map("file_uri") @db.Text
   mimeType   String   @map("mime_type") @db.VarChar(100)
   capturedAt DateTime @default(now()) @map("captured_at")
+
+  /** Raw image bytes stored server-side so any device on the same account can view the original photo. */
+  rawData  Bytes? @map("raw_data")
+  byteSize Int?   @map("byte_size")
+  /** Where the upload originated: "mobile" | "iot" | "unknown". */
+  source   String @default("mobile") @map("source") @db.VarChar(50)
 
   session          ScreeningSession  @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
   phlegmPrediction PhlegmPrediction?

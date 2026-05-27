@@ -20,6 +20,14 @@ function signAuthToken(payload) {
     });
 }
 function verifyAuthToken(token) {
-    return jsonwebtoken_1.default.verify(token, getJwtSecret());
+    const payload = jsonwebtoken_1.default.verify(token, getJwtSecret());
+    if (typeof payload === "string" || !payload || typeof payload !== "object") {
+        throw new Error("Invalid auth token");
+    }
+    const userId = payload.userId;
+    if (typeof userId !== "string" || !userId.trim()) {
+        throw new Error("Invalid auth token");
+    }
+    return { userId };
 }
 //# sourceMappingURL=auth.js.map

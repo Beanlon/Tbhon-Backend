@@ -1,0 +1,54 @@
+import { Router } from "express";
+import type { Request, Response, NextFunction } from "express";
+import {
+  iotDeviceCommand,
+  iotGetDeviceCommand,
+  iotGetTrigger,
+  iotDownloadSputum,
+  iotHealth,
+  iotHello,
+  iotSetTrigger,
+  iotUploadCough,
+  iotUploadSputum,
+} from "../controllers/iot.controller";
+import { requireIotKey } from "../middleware/iot.middleware";
+import { upload } from "../utils/upload";
+
+export const iotRouter = Router();
+
+function logIotHelloAttempt(req: Request, _res: Response, next: NextFunction) {
+  const authSource = req.header("x-iot-key") ? "X-IoT-Key" : req.header("authorization") ? "Authorization" : "no key";
+  console.log(`[iot] hello attempt from ${req.ip} (${authSource})`);
+  next();
+}
+
+// Public health check — used by ESP32 firmware to confirm the URL/network.
+iotRouter.get("/health", iotHealth);
+
+// Authenticated smoke test for microcontrollers before sending real media.
+iotRouter.post("/hello", logIotHelloAttempt, requireIotKey, iotHello);
+
+// Poll/set capture trigger command for camera/audio devices.
+iotRouter.post("/trigger", requireIotKey, iotSetTrigger);
+iotRouter.get("/trigger", requireIotKey, iotGetTrigger);
+iotRouter.post("/device-command", requireIotKey, iotDeviceCommand);
+iotRouter.get("/device-command", requireIotKey, iotGetDeviceCommand);
+
+// All upload endpoints require the shared device key.
+iotRouter.post(
+  "/cough-recordings",
+  requireIotKey,
+  upload.single("file"),
+  iotUploadCough,
+);
+iotRouter.post(
+  "/sputum-images",
+  requireIotKey,
+  upload.single("file"),
+  iotUploadSputum,
+);
+iotRouter.get(
+  "/sputum-images/:sessionId/file",
+  requireIotKey,
+  iotDownloadSputum,
+);

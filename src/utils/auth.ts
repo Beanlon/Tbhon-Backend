@@ -23,6 +23,14 @@ export function signAuthToken(payload: JwtPayload) {
   });
 }
 
-export function verifyAuthToken(token: string) {
-  return jwt.verify(token, getJwtSecret()) as unknown as JwtPayload;
+export function verifyAuthToken(token: string): JwtPayload {
+  const payload = jwt.verify(token, getJwtSecret());
+  if (typeof payload === "string" || !payload || typeof payload !== "object") {
+    throw new Error("Invalid auth token");
+  }
+  const userId = (payload as { userId?: unknown }).userId;
+  if (typeof userId !== "string" || !userId.trim()) {
+    throw new Error("Invalid auth token");
+  }
+  return { userId };
 }
