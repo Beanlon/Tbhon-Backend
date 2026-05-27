@@ -10,19 +10,34 @@ Local file:
 C:\Project VSC\Tbhon\mobile\.env
 ```
 
-Example for the cloud backend:
+Production setup (both URLs are Cloudflare tunnel URLs):
 
 ```env
-EXPO_PUBLIC_API_URL=http://<droplet-public-ip>:4000
-EXPO_PUBLIC_TB_API_URL=https://<cloudflare-tunnel>.trycloudflare.com
+EXPO_PUBLIC_API_URL=https://<backend-tunnel>.trycloudflare.com
+EXPO_PUBLIC_TB_API_URL=https://<ml-tunnel>.trycloudflare.com
 ```
 
 | Variable | Purpose |
 | --- | --- |
-| `EXPO_PUBLIC_API_URL` | Main backend API for auth, users, screenings, IoT-backed routes |
-| `EXPO_PUBLIC_TB_API_URL` | ML / inference API for cough or sputum prediction |
+| `EXPO_PUBLIC_API_URL` | Main backend API for auth, users, screenings, IoT-backed routes (backend droplet, port 4000 behind a tunnel) |
+| `EXPO_PUBLIC_TB_API_URL` | ML / inference API for cough or sputum prediction (ML droplet, port 8000 behind a tunnel) |
 
-When `EXPO_PUBLIC_API_URL` points to the droplet, the app uses the DigitalOcean backend and DigitalOcean database.
+When both variables point to the Cloudflare tunnels, the app uses the production droplets and the DigitalOcean database.
+
+### Why HTTPS Tunnels, Not Plain IPs
+
+Earlier setups used plain HTTP IPs such as `http://<droplet-ip>:4000`. That works on PC and on Android, but fails on iOS over cellular: multipart uploads silently time out and `raw_data` columns end up `NULL`. The Cloudflare tunnels fix this — see `08-cloudflare-tunnels.md`.
+
+### How To Find The Current Tunnel URLs
+
+Quick tunnels generate a new random URL whenever `cloudflared` restarts (including droplet reboots). To grab the current URLs:
+
+```bash
+ssh root@<backend-droplet-ip> "journalctl -u tbhon-backend-tunnel -n 30 --no-pager | grep trycloudflare"
+ssh root@<ml-droplet-ip>      "journalctl -u tbhon-ml-tunnel -n 30 --no-pager | grep trycloudflare"
+```
+
+The full reboot recovery flow is in `09-droplet-power-management.md`, Section 4.
 
 ## 2. Install Mobile Dependencies
 
@@ -93,7 +108,8 @@ There are two separate connections:
 | --- | --- |
 | Expo Go + `npx expo start -c` LAN mode | Usually yes |
 | Expo Go + `npx expo start -c --tunnel` | No |
-| API calls to `http://<droplet-ip>:4000` | No, internet is enough |
+| API calls to `https://<backend-tunnel>.trycloudflare.com` | No, internet is enough |
+| API calls to `https://<ml-tunnel>.trycloudflare.com` | No, internet is enough |
 
 The cloud backend does not require your phone and PC to be on the same Wi-Fi.
 
@@ -115,10 +131,10 @@ npx expo start -c --tunnel
 
 ## 8. Verify Backend Before App Testing
 
-In a browser:
+In a browser or PowerShell:
 
 ```text
-http://<droplet-public-ip>:4000/health
+https://<backend-tunnel>.trycloudflare.com/health
 ```
 
 Expected:
@@ -127,7 +143,19 @@ Expected:
 {"status":"ok"}
 ```
 
-If this does not work, fix the backend or firewall before testing the app.
+For the ML API:
+
+```text
+https://<ml-tunnel>.trycloudflare.com/healthz
+```
+
+Expected:
+
+```json
+{"ok":true}
+```
+
+If either does not work, fix the matching tunnel before testing the app. See `08-cloudflare-tunnels.md`.
 
 ## 9. Login And Database Notes
 
@@ -148,6 +176,14 @@ If login says the email/password is incorrect:
 
 ## 10. ML API Note
 
-`EXPO_PUBLIC_TB_API_URL` is separate from the main backend API.
+`EXPO_PUBLIC_TB_API_URL` is separate from the main backend API. It points to the ML droplet's Cloudflare tunnel.
 
-If it points to a Cloudflare tunnel, that tunnel must still be running on the PC that hosts the ML API. The backend droplet and MySQL can work even if the ML API is not deployed yet.
+The mobile screening flow needs the ML tunnel for:
+
+- `POST /check-quality` — green / amber cough quality badge after each clip
+- `POST /predict` — TB probability after all 3 coughs
+- `POST /predict-phlegm` — sputum AFB-load classification
+
+If only `EXPO_PUBLIC_API_URL` is configured, the app can still log in, view history, and persist screening **metadata**, but the actual cough analysis and quality badges will not work.
+
+See `07-ml-droplet-setup.md` for the ML droplet itself and `08-cloudflare-tunnels.md` for its tunnel.

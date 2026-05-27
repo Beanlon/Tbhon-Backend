@@ -1,6 +1,8 @@
 # 05 - Droplet Operations And Updates
 
-This document explains how to run, verify, update, and migrate the backend on the DigitalOcean droplet.
+This document explains how to run, verify, update, and migrate the **backend droplet** on DigitalOcean.
+
+For the ML droplet, see `07-ml-droplet-setup.md` for the one-time install and `09-droplet-power-management.md` for restart workflows. The Cloudflare tunnels are documented in `08-cloudflare-tunnels.md`.
 
 ## 1. Main Droplet Folder
 
@@ -55,7 +57,9 @@ Expected:
 Tbhon backend is running on port 4000
 ```
 
-## 3. Verify From Browser
+## 3. Verify Backend Health
+
+### 3.1. Local (skips the tunnel)
 
 From your PC:
 
@@ -63,7 +67,19 @@ From your PC:
 http://<droplet-public-ip>:4000/health
 ```
 
-Expected:
+This only works if port `4000` is open on the DigitalOcean firewall. It bypasses Cloudflare entirely and is useful when you want to confirm PM2 itself is up.
+
+### 3.2. Through The Cloudflare Tunnel
+
+From your PC:
+
+```powershell
+curl.exe -s https://<backend-tunnel-url>.trycloudflare.com/health
+```
+
+This is the same path the mobile app uses. If this fails but the local URL works, the tunnel is the problem — see `08-cloudflare-tunnels.md`.
+
+Expected (either method):
 
 ```json
 {"status":"ok"}
@@ -221,3 +237,34 @@ Then test:
 ```text
 http://<droplet-public-ip>:4000/health
 ```
+
+Or, the path the phone actually uses:
+
+```powershell
+curl.exe -s https://<backend-tunnel-url>.trycloudflare.com/health
+```
+
+## 11. Cloudflare Tunnel On The Backend Droplet
+
+The backend droplet also runs a Cloudflare tunnel under systemd so the mobile app can reach the API via HTTPS. See `08-cloudflare-tunnels.md` for installation and URL-refresh details.
+
+Common commands on the backend droplet:
+
+```bash
+sudo systemctl status tbhon-backend-tunnel
+sudo systemctl restart tbhon-backend-tunnel        # URL will change
+journalctl -u tbhon-backend-tunnel -n 30 --no-pager | grep trycloudflare
+```
+
+The tunnel only carries API traffic — `pm2 restart tbhon-backend` does **not** require restarting the tunnel and does **not** change the tunnel URL.
+
+## 12. When To Restart What
+
+| Change you made | Restart |
+| --- | --- |
+| Edited backend `.env` | `pm2 restart tbhon-backend` |
+| Pulled new backend code | `pm2 restart tbhon-backend` after `npm install` + `prisma generate` + `npm run build` |
+| Applied a Prisma migration | `pm2 restart tbhon-backend` |
+| Backend stuck or crashing | `pm2 restart tbhon-backend` |
+| Tunnel URL needs to change (rare, dev only) | `sudo systemctl restart tbhon-backend-tunnel` and update `mobile/.env` |
+| After droplet power on/off | See `09-droplet-power-management.md`, Section 4 |

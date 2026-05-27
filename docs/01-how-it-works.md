@@ -4,14 +4,22 @@
 
 ```text
 Phone / Expo app
-  -> EXPO_PUBLIC_API_URL
-  -> DigitalOcean droplet public IP, port 4000
-  -> Node/Express backend
+  -> EXPO_PUBLIC_API_URL  (https://<backend-tunnel>.trycloudflare.com)
+  -> Cloudflare edge
+  -> cloudflared on backend droplet
+  -> Node/Express backend  (PM2 on localhost:4000)
   -> Prisma
   -> DigitalOcean Managed MySQL
+
+Phone / Expo app
+  -> EXPO_PUBLIC_TB_API_URL  (https://<ml-tunnel>.trycloudflare.com)
+  -> Cloudflare edge
+  -> cloudflared on ML droplet
+  -> Python/FastAPI inference API  (systemd on localhost:8000)
+  -> Cough model.pt / phlegm model_best.pt
 ```
 
-The phone never connects directly to MySQL. It only calls the backend API. The backend is the process that talks to the database.
+The phone never connects directly to MySQL or to either droplet's IP. It only calls the two Cloudflare tunnel URLs.
 
 ## What Lives Where
 
@@ -19,29 +27,47 @@ The phone never connects directly to MySQL. It only calls the backend API. The b
 | --- | --- | --- |
 | Mobile app source code | Local PC, `C:\Project VSC\Tbhon\mobile` | Runs with Expo during development |
 | Expo Metro server | Local PC | Serves the dev JavaScript bundle to Expo Go |
-| Backend source code | Droplet, `~/Tbhon-Backend` | Cloned from GitHub |
-| Backend runtime | Droplet, PM2 process | Runs `dist/server.js` on port `4000` |
-| Database | DigitalOcean Managed MySQL | Separate service from the droplet |
-| Production backend `.env` | Droplet, `~/Tbhon-Backend/.env` | Holds `DATABASE_URL`, `JWT_SECRET`, `IOT_API_KEY` |
+| Backend source code | Backend droplet, `~/Tbhon-Backend` | Cloned from GitHub |
+| Backend runtime | Backend droplet, PM2 process | Runs `dist/server.js` on `localhost:4000` |
+| Backend tunnel | Backend droplet, systemd `tbhon-backend-tunnel` | `cloudflared` forwards from Cloudflare to `localhost:4000` |
+| Database | DigitalOcean Managed MySQL | Separate service from the droplets |
+| Production backend `.env` | Backend droplet, `~/Tbhon-Backend/.env` | Holds `DATABASE_URL`, `JWT_SECRET`, `IOT_API_KEY` |
+| ML source code | ML droplet, `~/Tbhon` | Cloned from the same GitHub repo as the mobile app |
+| ML runtime | ML droplet, systemd `tbhon-ml` | Runs `uvicorn ml.infer_api:app` on `localhost:8000` |
+| ML tunnel | ML droplet, systemd `tbhon-ml-tunnel` | `cloudflared` forwards from Cloudflare to `localhost:8000` |
+| Cough model weights | ML droplet, `~/Tbhon/ml/runs/<run>/model.pt` | Path is set via `TB_MODEL_PATH` env var |
+| Phlegm model weights | ML droplet, `~/Tbhon/ml_phlegm/runs/<run>/model_best.pt` | Path is set via `TB_PHLEGM_MODEL_PATH` env var |
 
-## Backend And Droplet Relationship
-
-The droplet is the Linux server. The backend is the Node.js app running on that server.
+## Two Droplets, Two Roles
 
 ```text
-DigitalOcean droplet
+Backend droplet
   -> Linux OS
-  -> ~/Tbhon-Backend
-  -> npm dependencies
-  -> dist/server.js
-  -> PM2 keeps the process alive
+  -> ~/Tbhon-Backend  (Node, Prisma, ts -> dist)
+  -> PM2 keeps dist/server.js alive on port 4000
+  -> cloudflared tunnel exposes it as HTTPS
+
+ML droplet
+  -> Linux OS
+  -> ~/Tbhon  (Python venv, ml/infer_api.py)
+  -> systemd keeps uvicorn alive on port 8000
+  -> cloudflared tunnel exposes it as HTTPS
 ```
 
-The database is not inside the droplet. The droplet only contains the backend code and the `.env` connection settings for the database.
+Neither droplet stores the database. MySQL is a separate Managed MySQL service. The backend droplet connects to it; the ML droplet does not.
+
+## Why Cloudflare Tunnels
+
+Without the tunnels the mobile app would talk to `http://<droplet-ip>:4000` and `http://<droplet-ip>:8000` directly. That works from PowerShell and from Android, but it **fails on iOS over cellular**:
+
+- iOS `URLSession` silently drops multipart POSTs to plain HTTP non-domain URLs.
+- PH cellular carriers (Globe, Smart, DITO) routinely block non-standard ports such as `:8000`.
+
+The tunnels expose both APIs as `https://*.trycloudflare.com` on port 443, which iOS and cellular carriers treat as normal HTTPS. See `08-cloudflare-tunnels.md` for details.
 
 ## Backend And Database Relationship
 
-The backend reads the droplet `.env` file when it starts.
+The backend reads `~/Tbhon-Backend/.env` when it starts.
 
 ```env
 DATABASE_URL="mysql://doadmin:<password>@<do-mysql-host>:25060/defaultdb?sslaccept=verify_ca&sslcert=/root/Tbhon-Backend/certs/ca-certificate.crt"
@@ -51,21 +77,37 @@ JWT_EXPIRES_IN="7d"
 IOT_API_KEY="..."
 ```
 
-When the backend needs data:
+Request lifecycle:
 
-1. Express receives a request, for example `/auth/login`.
-2. The controller calls Prisma.
-3. Prisma uses `DATABASE_URL`.
-4. MySQL receives the query in the `defaultdb` database.
-5. The backend returns the response to the phone.
+1. Phone calls a route on the backend tunnel URL, for example `/auth/login`.
+2. Cloudflare forwards it through `cloudflared` to `localhost:4000` on the backend droplet.
+3. Express receives the request, the controller calls Prisma.
+4. Prisma uses `DATABASE_URL` to query MySQL.
+5. The response travels back through the same tunnel to the phone.
+
+## ML Pipeline
+
+When the phone screens a cough:
+
+1. Phone records 3 cough clips locally.
+2. After each clip, phone POSTs to `/check-quality` on the ML tunnel URL (multipart `file`).
+3. ML droplet runs `cough_authenticity_metrics` and returns a green / amber badge label.
+4. After all 3 clips, phone POSTs each one to `/predict` on the ML tunnel.
+5. ML droplet runs the audio through the CNN and returns `prob_tb` / `prob_no_tb`.
+6. Phone also POSTs each cough's raw bytes to the **backend** tunnel so the recording is stored in MySQL (`cough_recordings.raw_data`).
+
+The same idea applies to sputum images: `/predict-phlegm` on the ML tunnel + raw upload on the backend tunnel.
 
 ## Network Rules
 
-For the system to work:
+For the system to work end-to-end:
 
-- The droplet firewall must allow inbound TCP `4000`.
-- The DigitalOcean MySQL Trusted Sources must include the backend droplet.
-- The mobile `.env` must point `EXPO_PUBLIC_API_URL` to the droplet backend URL.
+- The backend droplet's `cloudflared` connects outbound to Cloudflare on port 443.
+- The ML droplet's `cloudflared` connects outbound to Cloudflare on port 443.
+- The DigitalOcean MySQL Trusted Sources must include the backend droplet's IP.
+- The mobile `.env` must hold both current `*.trycloudflare.com` URLs.
+
+The droplets do **not** need their public ports exposed to the public internet for production traffic — the tunnel is outbound. Port 22 (SSH) and the local API ports are still useful during initial setup and debugging.
 
 ## Development Versus Production Env
 
@@ -76,15 +118,15 @@ There are two backend `.env` files:
 | Local `C:\Project VSC\Tbhon-Backend\.env` | You run `npm run dev` on your Windows PC |
 | Droplet `~/Tbhon-Backend/.env` | PM2 runs the production backend on the droplet |
 
-If the mobile app points to `http://<droplet-ip>:4000`, the local backend `.env` is not used.
+If the mobile app points to the **production tunnel URL**, the local backend `.env` is not used.
 
 ## Expo Networking
 
-`npx expo start -c` starts Metro on your PC. In LAN mode, the phone and PC usually need to be on the same Wi-Fi. In tunnel mode, they do not.
+`npx expo start -c` starts Metro on your PC. In LAN mode, the phone and PC must usually be on the same Wi-Fi. In tunnel mode, they do not.
 
 ```bash
 npx expo start -c
 npx expo start -c --tunnel
 ```
 
-The Expo connection is only for loading the app during development. API calls still go to `EXPO_PUBLIC_API_URL`.
+The Expo tunnel only carries the development JavaScript bundle. It is unrelated to the Cloudflare tunnels — those carry the actual API traffic and use `EXPO_PUBLIC_API_URL` / `EXPO_PUBLIC_TB_API_URL`.
