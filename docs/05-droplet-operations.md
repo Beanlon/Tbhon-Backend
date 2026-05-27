@@ -16,9 +16,10 @@ This folder should contain:
 package.json
 prisma/
 src/
-dist/
 .env
 ```
+
+After running `npm run build` on the droplet, a `dist/` folder will also appear. `dist/` is the compiled JavaScript output and is **not stored in Git** — it is generated locally on every machine that builds the project.
 
 ## 2. Start Or Restart Backend
 
