@@ -433,8 +433,9 @@ export async function completeScreening(req: AuthRequest, res: Response) {
           mimeType: true,
           recordedAt: true,
           byteSize: true,
+          coughAttempt: true,
         },
-        orderBy: { recordedAt: "asc" },
+        orderBy: [{ coughAttempt: "asc" }, { recordedAt: "asc" }],
       },
       sputumImage: {
         select: { imageId: true, mimeType: true, byteSize: true },
@@ -539,9 +540,11 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
           recordedAt: true,
           byteSize: true,
           source: true,
+          coughAttempt: true,
           qualityCheck: true,
           audioPrediction: true,
         },
+        orderBy: [{ coughAttempt: "asc" }, { recordedAt: "asc" }],
       },
       sputumImage: {
         select: {

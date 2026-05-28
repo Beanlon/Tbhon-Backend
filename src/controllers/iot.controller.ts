@@ -29,6 +29,8 @@ type DeviceCommandSource = "device-command" | "trigger" | "mobile";
 export type DeviceCommandContext = {
   userId?: string;
   sessionId?: string;
+  /** Which cough slot (1-based) this audio command is for. */
+  coughAttempt?: number;
 };
 
 type DeviceCommandState = {
@@ -38,6 +40,7 @@ type DeviceCommandState = {
   byIp: string;
   userId?: string;
   sessionId?: string;
+  coughAttempt?: number;
 };
 
 export type QueueDeviceCommandResult = {
@@ -49,6 +52,7 @@ export type QueueDeviceCommandResult = {
   source: DeviceCommandSource;
   userId: string | null;
   sessionId: string | null;
+  coughAttempt: number | null;
 };
 
 type ActiveAudioCapture = {
@@ -117,6 +121,7 @@ function formatDeviceCommandForFirmware(command: DeviceCommandState): string {
       queuedAt: command.queuedAt,
       ...(command.userId ? { userId: command.userId } : {}),
       ...(command.sessionId ? { sessionId: command.sessionId } : {}),
+      ...(command.coughAttempt != null ? { coughAttempt: command.coughAttempt } : {}),
     });
   }
   return command.command;
@@ -138,8 +143,15 @@ function readDeviceCommandContext(body: Body): DeviceCommandContext {
   if ((userId && !sessionId) || (!userId && sessionId)) {
     throw new HttpError(400, "userId and sessionId must be sent together");
   }
+  const rawAttempt = body.coughAttempt;
+  const coughAttempt =
+    typeof rawAttempt === "number" && Number.isInteger(rawAttempt) && rawAttempt >= 1
+      ? rawAttempt
+      : typeof rawAttempt === "string" && /^\d+$/.test(rawAttempt.trim())
+        ? parseInt(rawAttempt.trim(), 10)
+        : undefined;
   if (userId && sessionId) {
-    return { userId, sessionId };
+    return { userId, sessionId, ...(coughAttempt != null ? { coughAttempt } : {}) };
   }
   return {};
 }
@@ -167,6 +179,7 @@ export function queueDeviceCommand(
     byIp: meta.byIp ?? "unknown",
     ...(context?.userId ? { userId: context.userId } : {}),
     ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+    ...(context?.coughAttempt != null ? { coughAttempt: context.coughAttempt } : {}),
   };
   pendingDeviceCommand = queued;
 
@@ -179,6 +192,7 @@ export function queueDeviceCommand(
     source: queued.source,
     userId: queued.userId ?? null,
     sessionId: queued.sessionId ?? null,
+    coughAttempt: queued.coughAttempt ?? null,
   };
 }
 
@@ -244,6 +258,17 @@ export async function iotUploadCough(req: Request, res: Response) {
   const sessionId = getString(body.sessionId) ?? undefined;
   const deviceId = getString(body.deviceId) ?? null;
 
+  // coughAttempt (1-based) identifies which slot this recording fills.
+  // When provided, we upsert that slot so a retake replaces the old bytes
+  // instead of appending a new row. When absent (legacy firmware), we insert.
+  const rawAttempt = body.coughAttempt;
+  const coughAttempt =
+    typeof rawAttempt === "number" && Number.isInteger(rawAttempt) && rawAttempt >= 1
+      ? rawAttempt
+      : typeof rawAttempt === "string" && /^\d+$/.test(rawAttempt.trim())
+        ? parseInt(rawAttempt.trim(), 10)
+        : null;
+
   const file = readUploadedFile(req);
   if (!file) {
     throw new HttpError(400, "Missing audio. Send multipart `file` or JSON `fileBase64`.");
@@ -252,18 +277,57 @@ export async function iotUploadCough(req: Request, res: Response) {
 
   const resolvedSessionId = await resolveOrCreateSession({ userId, sessionId });
 
-  const recordingId = randomUUID();
-  await prisma.coughRecording.create({
-    data: {
-      recordingId,
-      sessionId: resolvedSessionId,
-      fileUri: deviceId ? `iot://${deviceId}` : null,
-      mimeType: norm.mimeType,
-      rawData: toBytes(file.buffer),
-      byteSize: file.buffer.length,
-      source: "iot",
-    },
-  });
+  let recordingId: string;
+
+  if (coughAttempt !== null) {
+    // Upsert by (sessionId, coughAttempt) — retake replaces the row in-place.
+    const existing = await prisma.coughRecording.findFirst({
+      where: { sessionId: resolvedSessionId, coughAttempt },
+      select: { recordingId: true },
+    });
+
+    if (existing) {
+      recordingId = existing.recordingId;
+      await prisma.coughRecording.update({
+        where: { recordingId },
+        data: {
+          fileUri: deviceId ? `iot://${deviceId}` : null,
+          mimeType: norm.mimeType,
+          rawData: toBytes(file.buffer),
+          byteSize: file.buffer.length,
+          recordedAt: new Date(),
+        },
+      });
+    } else {
+      recordingId = randomUUID();
+      await prisma.coughRecording.create({
+        data: {
+          recordingId,
+          sessionId: resolvedSessionId,
+          coughAttempt,
+          fileUri: deviceId ? `iot://${deviceId}` : null,
+          mimeType: norm.mimeType,
+          rawData: toBytes(file.buffer),
+          byteSize: file.buffer.length,
+          source: "iot",
+        },
+      });
+    }
+  } else {
+    // Legacy firmware — no attempt number; always insert.
+    recordingId = randomUUID();
+    await prisma.coughRecording.create({
+      data: {
+        recordingId,
+        sessionId: resolvedSessionId,
+        fileUri: deviceId ? `iot://${deviceId}` : null,
+        mimeType: norm.mimeType,
+        rawData: toBytes(file.buffer),
+        byteSize: file.buffer.length,
+        source: "iot",
+      },
+    });
+  }
 
   res.status(201).json({
     ok: true,
@@ -274,6 +338,7 @@ export async function iotUploadCough(req: Request, res: Response) {
       mimeType: norm.mimeType,
       byteSize: file.buffer.length,
       source: "iot",
+      coughAttempt,
     },
   });
 }

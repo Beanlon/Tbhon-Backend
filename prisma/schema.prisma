@@ -97,11 +97,18 @@ model CoughRecording {
   byteSize Int?   @map("byte_size")
   /** Where the upload originated: "mobile" | "iot" | "unknown". */
   source   String @default("mobile") @map("source") @db.VarChar(50)
+  /**
+   * Which cough slot this recording belongs to (1 = first, 2 = second, 3 = third).
+   * Nullable for legacy rows recorded before this column was added.
+   * Unique per session so retaking cough 2 upserts the same slot instead of appending.
+   */
+  coughAttempt Int? @map("cough_attempt")
 
   session         ScreeningSession   @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)
   qualityCheck    CoughQualityCheck?
   audioPrediction TbAudioPrediction?
 
+  @@unique([sessionId, coughAttempt], name: "session_cough_attempt", map: "cough_recordings_session_attempt_key")
   @@index([sessionId])
   @@map("cough_recordings")
 }
