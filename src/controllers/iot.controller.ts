@@ -71,9 +71,16 @@ export function parseDeviceCommand(raw: unknown): DeviceCommandType | null {
     return "audio";
   }
   if (
-    ["audio upload", "audio-upload", "audio_upload", "stop", "stop-audio", "stop_audio", "stopaudio"].includes(
-      normalized,
-    )
+    [
+      "audio upload",
+      "audio-upload",
+      "audio_upload",
+      "stop",
+      "stop audio",
+      "stop-audio",
+      "stop_audio",
+      "stopaudio",
+    ].includes(normalized)
   ) {
     return "audio upload";
   }
@@ -145,6 +152,12 @@ export function queueDeviceCommand(
 ): QueueDeviceCommandResult {
   if (command === "audio upload") {
     assertAudioUploadAllowed();
+  } else if (command === "audio") {
+    // Mobile or POST can queue start before the device GET; stop/upload still needs a timer.
+    activeAudioCapture = {
+      startedAtMs: Date.now(),
+      minSeconds: AUDIO_MIN_SECONDS,
+    };
   }
 
   const queued: DeviceCommandState = {
