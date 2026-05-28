@@ -5,6 +5,10 @@ import { prisma } from "../prisma";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseDeviceCommand, queueDeviceCommand, resolveOrCreateSession } from "./iot.controller";
+import {
+  deleteIncompleteScreeningsForUser,
+  purgeStaleIncompleteScreenings,
+} from "../services/incompleteScreeningCleanup";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -153,6 +157,14 @@ function isPhoneLocalMediaUri(uri: string): boolean {
 /** POST /screenings/draft — open session before IoT sample / screening finish. */
 export async function createDraftScreening(req: AuthRequest, res: Response) {
   const userId = authenticatedUserId(req);
+  // Starting a new screening: remove every prior incomplete session (no results page yet).
+  const cleaned = await deleteIncompleteScreeningsForUser({ userId });
+  if (cleaned.count > 0 && process.env.NODE_ENV !== "test") {
+    console.log(
+      `[Screening] Removed ${cleaned.count} incomplete session(s) for user before new draft`,
+    );
+  }
+
   const sessionId = randomUUID();
   await prisma.screeningSession.create({
     data: {
@@ -349,7 +361,16 @@ export async function completeScreening(req: AuthRequest, res: Response) {
 
     let imageIdForPhlegm: string | null = existingSputum?.imageId ?? null;
 
-    if (imageUri && imageUri.length > 0 && isPhoneLocalMediaUri(imageUri)) {
+    const hasStoredSputumBytes =
+      typeof existingSputum?.byteSize === "number" && existingSputum.byteSize > 0;
+
+    // Do not replace server-persisted bytes (e.g. IoT retake) with a stale phone path.
+    if (
+      imageUri &&
+      imageUri.length > 0 &&
+      isPhoneLocalMediaUri(imageUri) &&
+      !hasStoredSputumBytes
+    ) {
       const mimeType = inferMime(imageUri, "audio/wav", "image/jpeg");
       if (existingSputum) {
         await tx.sputumImage.update({
@@ -422,9 +443,47 @@ export async function completeScreening(req: AuthRequest, res: Response) {
     },
   });
 
+  // Drop other abandoned drafts for this user; keep the session that just finished.
+  void deleteIncompleteScreeningsForUser({ userId, exceptSessionId: sessionId }).catch((err) => {
+    console.error("[Screening] Post-complete incomplete cleanup failed:", err);
+  });
+
   // Mobile clients use the returned recordingIds / imageId to attach the
   // actual raw bytes via `/screenings/:sessionId/(cough-recordings/:id|sputum-image)/raw`.
   res.status(201).json({ session });
+}
+
+/** DELETE /screenings/:sessionId — remove an incomplete session (no results / risk yet). */
+export async function deleteIncompleteScreening(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+
+  const row = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+    select: { sessionId: true, result: { select: { resultId: true } } },
+  });
+  if (!row) throw new HttpError(404, "Screening not found");
+  if (row.result) {
+    throw new HttpError(
+      409,
+      "Cannot delete a completed screening. Only sessions that never reached the results page can be removed.",
+    );
+  }
+
+  await prisma.screeningSession.delete({ where: { sessionId } });
+  res.json({ ok: true, sessionId, deleted: true });
+}
+
+/** POST /screenings/cleanup-incomplete — purge stale incomplete sessions (optional ?maxAgeHours=). */
+export async function cleanupIncompleteScreenings(req: AuthRequest, res: Response) {
+  authenticatedUserId(req);
+  const maxAgeHoursRaw = getString((req.query as Record<string, unknown>).maxAgeHours);
+  const maxAgeHours = maxAgeHoursRaw ? Number(maxAgeHoursRaw) : undefined;
+  const result = await purgeStaleIncompleteScreenings(
+    maxAgeHours !== undefined && Number.isFinite(maxAgeHours) ? { maxAgeHours } : undefined,
+  );
+  res.json({ ok: true, ...result });
 }
 
 export async function listMyScreenings(req: AuthRequest, res: Response) {
@@ -512,14 +571,15 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
     fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/cough-recordings/${encodeURIComponent(r.recordingId)}/file`,
   }));
 
-  const sputumImage = session.sputumImage
-    ? {
-        ...session.sputumImage,
-        hasRawData:
-          typeof session.sputumImage.byteSize === "number" && session.sputumImage.byteSize > 0,
-        fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/sputum-image/file`,
-      }
-    : null;
+  const sputumImage =
+    session.sputumImage && session.sputumImage.sessionId === session.sessionId
+      ? {
+          ...session.sputumImage,
+          hasRawData:
+            typeof session.sputumImage.byteSize === "number" && session.sputumImage.byteSize > 0,
+          fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/sputum-image/file`,
+        }
+      : null;
 
   res.json({
     session: {

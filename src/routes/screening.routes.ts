@@ -1,7 +1,9 @@
 import { Router } from "express";
 import {
+  cleanupIncompleteScreenings,
   completeScreening,
   createDraftScreening,
+  deleteIncompleteScreening,
   getMyScreening,
   listMyScreenings,
   requestIotCapture,
@@ -22,7 +24,9 @@ export const screeningRouter = Router();
 screeningRouter.post("/", requireAuth, completeScreening);
 screeningRouter.post("/draft", requireAuth, createDraftScreening);
 screeningRouter.post("/iot/request-capture", requireAuth, requestIotCapture);
+screeningRouter.post("/cleanup-incomplete", requireAuth, cleanupIncompleteScreenings);
 screeningRouter.get("/", requireAuth, listMyScreenings);
+screeningRouter.delete("/:sessionId", requireAuth, deleteIncompleteScreening);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 
 // --- Raw media (account-scoped, cross-device) -----------------------------
