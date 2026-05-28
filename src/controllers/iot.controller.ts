@@ -2,6 +2,11 @@ import type { Request, Response } from "express";
 import { randomUUID } from "crypto";
 import { prisma } from "../prisma";
 import { HttpError, getString, isRecord } from "../utils/http";
+import {
+  parseCoughAttempt,
+  parseCoughAttemptStrict,
+  upsertSessionCoughRecording,
+} from "../utils/coughAttempt";
 import { normalizeAudioMime, normalizeImageMime, readUploadedFile, toBytes } from "../utils/upload";
 
 /**
@@ -143,13 +148,7 @@ function readDeviceCommandContext(body: Body): DeviceCommandContext {
   if ((userId && !sessionId) || (!userId && sessionId)) {
     throw new HttpError(400, "userId and sessionId must be sent together");
   }
-  const rawAttempt = body.coughAttempt;
-  const coughAttempt =
-    typeof rawAttempt === "number" && Number.isInteger(rawAttempt) && rawAttempt >= 1
-      ? rawAttempt
-      : typeof rawAttempt === "string" && /^\d+$/.test(rawAttempt.trim())
-        ? parseInt(rawAttempt.trim(), 10)
-        : undefined;
+  const coughAttempt = parseCoughAttemptStrict(body.coughAttempt);
   if (userId && sessionId) {
     return { userId, sessionId, ...(coughAttempt != null ? { coughAttempt } : {}) };
   }
@@ -253,21 +252,19 @@ export async function resolveOrCreateSession(args: {
 /** POST /iot/cough-recordings */
 export async function iotUploadCough(req: Request, res: Response) {
   const body = bodyOf(req);
+  console.log("[iot/cough-recordings] Received body:", JSON.stringify(body));
+  console.log("[iot/cough-recordings] coughAttempt:", body.coughAttempt, "| cough_attempt:", body.cough_attempt);
+
   const userId = getString(body.userId);
   if (!userId) throw new HttpError(400, "userId is required");
   const sessionId = getString(body.sessionId) ?? undefined;
   const deviceId = getString(body.deviceId) ?? null;
 
-  // coughAttempt (1-based) identifies which slot this recording fills.
-  // When provided, we upsert that slot so a retake replaces the old bytes
-  // instead of appending a new row. When absent (legacy firmware), we insert.
-  const rawAttempt = body.coughAttempt;
-  const coughAttempt =
-    typeof rawAttempt === "number" && Number.isInteger(rawAttempt) && rawAttempt >= 1
-      ? rawAttempt
-      : typeof rawAttempt === "string" && /^\d+$/.test(rawAttempt.trim())
-        ? parseInt(rawAttempt.trim(), 10)
-        : null;
+  // coughAttempt (1–3) = which slot; retakes replace that row (see upsertSessionCoughRecording).
+  // Accept both camelCase and snake_case from firmware.
+  const rawAttempt = body.coughAttempt ?? body.cough_attempt;
+  const coughAttempt = parseCoughAttempt(rawAttempt);
+  console.log("[iot/cough-recordings] Parsed coughAttempt:", coughAttempt);
 
   const file = readUploadedFile(req);
   if (!file) {
@@ -280,41 +277,15 @@ export async function iotUploadCough(req: Request, res: Response) {
   let recordingId: string;
 
   if (coughAttempt !== null) {
-    // Upsert by (sessionId, coughAttempt) — retake replaces the row in-place.
-    const existing = await prisma.coughRecording.findFirst({
-      where: { sessionId: resolvedSessionId, coughAttempt },
-      select: { recordingId: true },
+    recordingId = await upsertSessionCoughRecording(resolvedSessionId, coughAttempt, {
+      fileUri: deviceId ? `iot://${deviceId}` : null,
+      mimeType: norm.mimeType,
+      rawData: file.buffer,
+      byteSize: file.buffer.length,
+      source: "iot",
     });
-
-    if (existing) {
-      recordingId = existing.recordingId;
-      await prisma.coughRecording.update({
-        where: { recordingId },
-        data: {
-          fileUri: deviceId ? `iot://${deviceId}` : null,
-          mimeType: norm.mimeType,
-          rawData: toBytes(file.buffer),
-          byteSize: file.buffer.length,
-          recordedAt: new Date(),
-        },
-      });
-    } else {
-      recordingId = randomUUID();
-      await prisma.coughRecording.create({
-        data: {
-          recordingId,
-          sessionId: resolvedSessionId,
-          coughAttempt,
-          fileUri: deviceId ? `iot://${deviceId}` : null,
-          mimeType: norm.mimeType,
-          rawData: toBytes(file.buffer),
-          byteSize: file.buffer.length,
-          source: "iot",
-        },
-      });
-    }
   } else {
-    // Legacy firmware — no attempt number; always insert.
+    // Legacy firmware — no attempt number; always insert (may duplicate on retake).
     recordingId = randomUUID();
     await prisma.coughRecording.create({
       data: {

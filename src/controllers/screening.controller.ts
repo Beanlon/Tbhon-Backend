@@ -1,10 +1,16 @@
 import type { Response } from "express";
 import { randomUUID } from "crypto";
-import type { Prisma } from "@prisma/client";
 import { prisma } from "../prisma";
+import type { InputJsonValue } from "../types/input-json";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseDeviceCommand, queueDeviceCommand, resolveOrCreateSession } from "./iot.controller";
+import {
+  MAX_COUGH_ATTEMPTS,
+  parseCoughAttemptStrict,
+  type PrismaTransaction,
+  upsertSessionCoughRecording,
+} from "../utils/coughAttempt";
 import {
   deleteIncompleteScreeningsForUser,
   purgeStaleIncompleteScreenings,
@@ -42,7 +48,7 @@ function parseJsonArrayOfStrings(raw: unknown): string[] {
   return [];
 }
 
-function parseChecklistPayloadRecord(body: Record<string, unknown>): Prisma.InputJsonValue | undefined {
+function parseChecklistPayloadRecord(body: Record<string, unknown>): InputJsonValue | undefined {
   let raw: unknown = body.checklist;
   if (typeof raw === "string" && raw.trim().length > 0) {
     try {
@@ -53,7 +59,7 @@ function parseChecklistPayloadRecord(body: Record<string, unknown>): Prisma.Inpu
   }
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  return raw as Prisma.InputJsonValue;
+  return raw as InputJsonValue;
 }
 
 function parseChecklistItems(body: Record<string, unknown>): { id: string; value: boolean }[] {
@@ -102,31 +108,31 @@ function coerceRiskLevel(raw: unknown): "low" | "moderate" | "high" {
   return "low";
 }
 
-function parsePhlegmProbs(raw: unknown): Prisma.InputJsonValue | undefined {
+function parsePhlegmProbs(raw: unknown): InputJsonValue | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw === "string") {
     if (!raw.trim().length) return undefined;
     try {
       const v = JSON.parse(raw) as unknown;
-      return v !== null && typeof v === "object" ? (v as Prisma.InputJsonValue) : undefined;
+      return v !== null && typeof v === "object" ? (v as InputJsonValue) : undefined;
     } catch {
       return undefined;
     }
   }
-  if (typeof raw === "object") return raw as Prisma.InputJsonValue;
+  if (typeof raw === "object") return raw as InputJsonValue;
   return undefined;
 }
 
-function parseInvalidReasons(raw: unknown): Prisma.InputJsonValue | undefined {
+function parseInvalidReasons(raw: unknown): InputJsonValue | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (Array.isArray(raw)) {
     const strings = raw.filter((x): x is string => typeof x === "string");
-    return strings as unknown as Prisma.InputJsonValue;
+    return strings as unknown as InputJsonValue;
   }
   if (typeof raw === "string") {
     try {
       const v = JSON.parse(raw) as unknown;
-      return Array.isArray(v) ? (v as unknown as Prisma.InputJsonValue) : undefined;
+      return Array.isArray(v) ? (v as unknown as InputJsonValue) : undefined;
     } catch {
       return undefined;
     }
@@ -202,10 +208,19 @@ export async function requestIotCapture(req: AuthRequest, res: Response) {
     await resolveOrCreateSession({ userId, sessionId });
   }
 
+  const coughAttempt =
+    command === "audio" ? parseCoughAttemptStrict(req.body.coughAttempt) : undefined;
+
   const queued = queueDeviceCommand(
     command,
     { source: "mobile", byIp: req.ip ?? "unknown" },
-    sessionId ? { userId, sessionId } : undefined,
+    sessionId
+      ? {
+          userId,
+          sessionId,
+          ...(coughAttempt != null ? { coughAttempt } : {}),
+        }
+      : undefined,
   );
   res.status(201).json({ ok: true, ...queued, sessionId: sessionId ?? null });
 }
@@ -253,9 +268,9 @@ export async function completeScreening(req: AuthRequest, res: Response) {
     sessionId = randomUUID();
   }
 
-  await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx: PrismaTransaction) => {
     const knownQuestions = await tx.symptomQuestion.findMany({ select: { questionId: true } });
-    const known = new Set(knownQuestions.map((q) => q.questionId));
+    const known = new Set(knownQuestions.map((q: { questionId: string }) => q.questionId));
     const symptomCreates = checklistItems
       .filter((x) => known.has(x.id))
       .map((x) => ({
@@ -305,22 +320,24 @@ export async function completeScreening(req: AuthRequest, res: Response) {
     }
 
     const recordingIds: string[] = [];
-    for (const uri of audioUris) {
-      const recordingId = randomUUID();
-      recordingIds.push(recordingId);
-      await tx.coughRecording.create({
-        data: {
-          recordingId,
-          sessionId,
-          // `file_uri` is now nullable; we keep the original phone-local path
-          // here purely for diagnostics. The real audio is uploaded separately
-          // via POST /screenings/:sessionId/cough-recordings so the bytes live
-          // on the server and any signed-in device can play them.
+    const urisToLink = audioUris.slice(0, MAX_COUGH_ATTEMPTS);
+    for (let i = 0; i < urisToLink.length; i++) {
+      const uri = urisToLink[i];
+      if (!uri) continue;
+      const coughAttempt = i + 1;
+      const recordingId = await upsertSessionCoughRecording(
+        sessionId,
+        coughAttempt,
+        {
           fileUri: uri,
           mimeType: inferMime(uri, "audio/wav", "image/jpeg"),
+          rawData: Buffer.alloc(0),
+          byteSize: 0,
           source: "mobile",
         },
-      });
+        tx,
+      );
+      recordingIds.push(recordingId);
     }
 
     const firstRecordingId = recordingIds[0];
@@ -568,7 +585,7 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
   // Annotate each media row with a canonical, server-served URL so any device
   // on this account can fetch the original bytes regardless of where they
   // were recorded. The mobile app appends the API base + bearer token.
-  const coughRecordings = session.coughRecordings.map((r) => ({
+  const coughRecordings = session.coughRecordings.map((r: (typeof session.coughRecordings)[number]) => ({
     ...r,
     hasRawData: typeof r.byteSize === "number" && r.byteSize > 0,
     fileUrl: `/screenings/${encodeURIComponent(session.sessionId)}/cough-recordings/${encodeURIComponent(r.recordingId)}/file`,
