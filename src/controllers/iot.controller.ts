@@ -68,6 +68,26 @@ type ActiveAudioCapture = {
 let pendingDeviceCommand: DeviceCommandState | null = null;
 let activeAudioCapture: ActiveAudioCapture | null = null;
 
+type RecentUpload = {
+  timestamp: string;
+  type: "cough" | "sputum";
+  userId: string;
+  sessionId: string;
+  coughAttempt: number | null;
+  byteSize: number;
+  recordingId: string;
+};
+
+const recentUploads: RecentUpload[] = [];
+const MAX_RECENT_UPLOADS = 20;
+
+function trackUpload(upload: RecentUpload) {
+  recentUploads.unshift(upload);
+  if (recentUploads.length > MAX_RECENT_UPLOADS) {
+    recentUploads.pop();
+  }
+}
+
 function bodyOf(req: Request): Body {
   return isRecord(req.body) ? (req.body as Body) : {};
 }
@@ -252,13 +272,24 @@ export async function resolveOrCreateSession(args: {
 /** POST /iot/cough-recordings */
 export async function iotUploadCough(req: Request, res: Response) {
   const body = bodyOf(req);
-  console.log("[iot/cough-recordings] Received body:", JSON.stringify(body));
+  const timestamp = new Date().toISOString();
+  console.log(`\n=== [${timestamp}] IOT COUGH UPLOAD RECEIVED ===`);
+  console.log("[iot/cough-recordings] Body keys:", Object.keys(body).join(", "));
+  console.log("[iot/cough-recordings] userId:", body.userId);
+  console.log("[iot/cough-recordings] sessionId:", body.sessionId);
   console.log("[iot/cough-recordings] coughAttempt:", body.coughAttempt, "| cough_attempt:", body.cough_attempt);
+  console.log("[iot/cough-recordings] deviceId:", body.deviceId);
+  console.log("[iot/cough-recordings] IP:", req.ip);
 
   const userId = getString(body.userId);
-  if (!userId) throw new HttpError(400, "userId is required");
+  if (!userId) {
+    console.log("[iot/cough-recordings] ERROR: userId is missing!");
+    throw new HttpError(400, "userId is required");
+  }
   const sessionId = getString(body.sessionId) ?? undefined;
   const deviceId = getString(body.deviceId) ?? null;
+  
+  console.log("[iot/cough-recordings] Parsed - userId:", userId, "sessionId:", sessionId);
 
   // coughAttempt (1–3) = which slot; retakes replace that row (see upsertSessionCoughRecording).
   // Accept both camelCase and snake_case from firmware.
@@ -299,6 +330,24 @@ export async function iotUploadCough(req: Request, res: Response) {
       },
     });
   }
+
+  console.log(`[iot/cough-recordings] SUCCESS - Saved recording:`);
+  console.log(`  recordingId: ${recordingId}`);
+  console.log(`  sessionId: ${resolvedSessionId}`);
+  console.log(`  userId: ${userId}`);
+  console.log(`  coughAttempt: ${coughAttempt}`);
+  console.log(`  byteSize: ${file.buffer.length}`);
+  console.log(`=== IOT COUGH UPLOAD COMPLETE ===\n`);
+
+  trackUpload({
+    timestamp: new Date().toISOString(),
+    type: "cough",
+    userId,
+    sessionId: resolvedSessionId,
+    coughAttempt,
+    byteSize: file.buffer.length,
+    recordingId,
+  });
 
   res.status(201).json({
     ok: true,
@@ -381,6 +430,36 @@ export async function iotUploadSputum(req: Request, res: Response) {
 /** GET /iot/health */
 export function iotHealth(_req: Request, res: Response) {
   res.json({ ok: true, service: "tbhon-iot", time: new Date().toISOString() });
+}
+
+/** GET /iot/debug/recent-uploads - Shows recent IoT uploads for debugging */
+export function iotDebugRecentUploads(req: Request, res: Response) {
+  const sessionFilter = getSingleValue(req.query.sessionId);
+  const filtered = sessionFilter
+    ? recentUploads.filter((u) => u.sessionId === sessionFilter || u.sessionId.startsWith(sessionFilter))
+    : recentUploads;
+
+  res.json({
+    ok: true,
+    count: filtered.length,
+    filter: sessionFilter ?? null,
+    uploads: filtered,
+    pendingCommand: pendingDeviceCommand
+      ? {
+          command: pendingDeviceCommand.command,
+          queuedAt: pendingDeviceCommand.queuedAt,
+          userId: pendingDeviceCommand.userId ?? null,
+          sessionId: pendingDeviceCommand.sessionId ?? null,
+          coughAttempt: pendingDeviceCommand.coughAttempt ?? null,
+        }
+      : null,
+    activeAudioCapture: activeAudioCapture
+      ? {
+          startedAtMs: activeAudioCapture.startedAtMs,
+          elapsedSeconds: getActiveAudioElapsedSeconds(),
+        }
+      : null,
+  });
 }
 
 /** POST /iot/hello */

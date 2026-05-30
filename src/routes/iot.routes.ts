@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import {
+  iotDebugRecentUploads,
   iotDeviceCommand,
   iotGetDeviceCommand,
   iotGetTrigger,
@@ -24,6 +25,9 @@ function logIotHelloAttempt(req: Request, _res: Response, next: NextFunction) {
 
 // Public health check — used by ESP32 firmware to confirm the URL/network.
 iotRouter.get("/health", iotHealth);
+
+// Debug endpoint to see recent uploads and pending commands (requires IoT key).
+iotRouter.get("/debug/recent-uploads", requireIotKey, iotDebugRecentUploads);
 
 // Authenticated smoke test for microcontrollers before sending real media.
 iotRouter.post("/hello", logIotHelloAttempt, requireIotKey, iotHello);
