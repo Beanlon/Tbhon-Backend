@@ -110,6 +110,9 @@ export function getDevicePresenceSnapshot() {
     devicePresence.lastSeenAtMs > 0 &&
     Date.now() - devicePresence.lastSeenAtMs <= DEVICE_ONLINE_MS;
   const state: IotHardwareState = online ? devicePresence.state : "offline";
+  if (state === "idle" || state === "uploading") {
+    activeAudioCapture = null;
+  }
   const hasPending = pendingDeviceCommand !== null;
   const ready = online && state === "idle" && !hasPending && !activeAudioCapture;
 
@@ -604,6 +607,9 @@ export function iotReportPresence(req: Request, res: Response) {
   touchDevicePresence(state, req.ip ?? null);
   if (state === "recording") {
     markDeviceRecordingStarted();
+  } else if (state === "uploading" || state === "idle") {
+    // Bench finished capture — don't leave the mobile timer stuck on "recording".
+    activeAudioCapture = null;
   }
 
   res.json({
