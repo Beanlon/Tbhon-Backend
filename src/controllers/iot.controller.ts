@@ -192,6 +192,16 @@ function getActiveAudioElapsedSeconds(): number | null {
   return (Date.now() - activeAudioCapture.startedAtMs) / 1000;
 }
 
+/** Start the capture clock when the bench actually begins recording (not when the app POST queues). */
+function markDeviceRecordingStarted() {
+  if (!activeAudioCapture) {
+    activeAudioCapture = {
+      startedAtMs: Date.now(),
+      minSeconds: AUDIO_MIN_SECONDS,
+    };
+  }
+}
+
 function assertAudioUploadAllowed() {
   const elapsedSeconds = getActiveAudioElapsedSeconds();
   if (!activeAudioCapture || elapsedSeconds === null) {
@@ -254,13 +264,8 @@ export function queueDeviceCommand(
 ): QueueDeviceCommandResult {
   if (command === "audio upload") {
     assertAudioUploadAllowed();
-  } else if (command === "audio") {
-    // Mobile or POST can queue start before the device GET; stop/upload still needs a timer.
-    activeAudioCapture = {
-      startedAtMs: Date.now(),
-      minSeconds: AUDIO_MIN_SECONDS,
-    };
   }
+  // `audio` timer starts in markDeviceRecordingStarted() when the device polls or sends presence.
 
   const queued: DeviceCommandState = {
     command,
@@ -597,6 +602,9 @@ export function iotReportPresence(req: Request, res: Response) {
   }
 
   touchDevicePresence(state, req.ip ?? null);
+  if (state === "recording") {
+    markDeviceRecordingStarted();
+  }
 
   res.json({
     ok: true,
@@ -620,7 +628,10 @@ export function iotGetDeviceCommand(req: Request, res: Response) {
     parseHardwareState(getSingleValue(req.query.status)) ??
     parseHardwareState(req.header("x-device-state") ?? undefined);
   if (pollState) {
-    touchDevicePresence(pollState, req.ip ?? null);
+    // Firmware polls with ?status=idle between commands — don't wipe "recording" while capture runs.
+    if (!(pollState === "idle" && activeAudioCapture)) {
+      touchDevicePresence(pollState, req.ip ?? null);
+    }
   }
 
   const current = pendingDeviceCommand;
@@ -632,10 +643,7 @@ export function iotGetDeviceCommand(req: Request, res: Response) {
       pendingDeviceCommand = null;
     }
     if (current.command === "audio") {
-      activeAudioCapture = {
-        startedAtMs: Date.now(),
-        minSeconds: AUDIO_MIN_SECONDS,
-      };
+      markDeviceRecordingStarted();
     } else if (current.command === "audio upload") {
       activeAudioCapture = null;
     }
@@ -692,10 +700,7 @@ export function iotGetTrigger(req: Request, res: Response) {
       pendingDeviceCommand = null;
     }
     if (current.command === "audio") {
-      activeAudioCapture = {
-        startedAtMs: Date.now(),
-        minSeconds: AUDIO_MIN_SECONDS,
-      };
+      markDeviceRecordingStarted();
     } else if (current.command === "audio upload") {
       activeAudioCapture = null;
     }
