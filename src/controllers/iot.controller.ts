@@ -68,6 +68,77 @@ type ActiveAudioCapture = {
 let pendingDeviceCommand: DeviceCommandState | null = null;
 let activeAudioCapture: ActiveAudioCapture | null = null;
 
+/** Device is "online" when it polled or sent presence within this window. */
+const DEVICE_ONLINE_MS = 3000;
+
+export type IotHardwareState = "offline" | "idle" | "recording" | "uploading";
+
+type DevicePresenceState = {
+  state: IotHardwareState;
+  lastSeenAtMs: number;
+  byIp: string | null;
+};
+
+let devicePresence: DevicePresenceState = {
+  state: "offline",
+  lastSeenAtMs: 0,
+  byIp: null,
+};
+
+function parseHardwareState(raw: string | undefined): Exclude<IotHardwareState, "offline"> | null {
+  if (!raw) return null;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "idle" || normalized === "recording" || normalized === "uploading") {
+    return normalized;
+  }
+  return null;
+}
+
+export function touchDevicePresence(
+  state: Exclude<IotHardwareState, "offline">,
+  byIp?: string | null,
+) {
+  devicePresence = {
+    state,
+    lastSeenAtMs: Date.now(),
+    byIp: byIp ?? devicePresence.byIp,
+  };
+}
+
+export function getDevicePresenceSnapshot() {
+  const online =
+    devicePresence.lastSeenAtMs > 0 &&
+    Date.now() - devicePresence.lastSeenAtMs <= DEVICE_ONLINE_MS;
+  const state: IotHardwareState = online ? devicePresence.state : "offline";
+  const hasPending = pendingDeviceCommand !== null;
+  const ready = online && state === "idle" && !hasPending && !activeAudioCapture;
+
+  return {
+    online,
+    ready,
+    state,
+    lastSeenAt:
+      devicePresence.lastSeenAtMs > 0
+        ? new Date(devicePresence.lastSeenAtMs).toISOString()
+        : null,
+    pendingCommand: hasPending
+      ? {
+          command: pendingDeviceCommand!.command,
+          queuedAt: pendingDeviceCommand!.queuedAt,
+          userId: pendingDeviceCommand!.userId ?? null,
+          sessionId: pendingDeviceCommand!.sessionId ?? null,
+          coughAttempt: pendingDeviceCommand!.coughAttempt ?? null,
+        }
+      : null,
+    activeAudioCapture: activeAudioCapture
+      ? {
+          elapsedSeconds: getActiveAudioElapsedSeconds(),
+          minSeconds: activeAudioCapture.minSeconds,
+        }
+      : null,
+  };
+}
+
 type RecentUpload = {
   timestamp: string;
   type: "cough" | "sputum";
@@ -349,6 +420,9 @@ export async function iotUploadCough(req: Request, res: Response) {
     recordingId,
   });
 
+  touchDevicePresence("idle", req.ip ?? null);
+  activeAudioCapture = null;
+
   res.status(201).json({
     ok: true,
     recording: {
@@ -511,8 +585,44 @@ export async function iotDeviceCommand(req: Request, res: Response) {
   res.status(201).json({ ok: true, ...queued });
 }
 
+/** POST /iot/presence — lightweight heartbeat from ESP32 (especially while recording). */
+export function iotReportPresence(req: Request, res: Response) {
+  const body = bodyOf(req);
+  const state =
+    parseHardwareState(getString(body.state)) ??
+    parseHardwareState(getSingleValue(req.query.status));
+
+  if (!state) {
+    throw new HttpError(400, "state must be `idle`, `recording`, or `uploading`");
+  }
+
+  touchDevicePresence(state, req.ip ?? null);
+
+  res.json({
+    ok: true,
+    ...getDevicePresenceSnapshot(),
+  });
+}
+
+/** GET /iot/device-status — mobile app polls until device is online/ready/recording. */
+export function iotGetDeviceStatus(_req: Request, res: Response) {
+  res.json({
+    ok: true,
+    service: "tbhon-iot",
+    time: new Date().toISOString(),
+    ...getDevicePresenceSnapshot(),
+  });
+}
+
 /** GET /iot/device-command */
 export function iotGetDeviceCommand(req: Request, res: Response) {
+  const pollState =
+    parseHardwareState(getSingleValue(req.query.status)) ??
+    parseHardwareState(req.header("x-device-state") ?? undefined);
+  if (pollState) {
+    touchDevicePresence(pollState, req.ip ?? null);
+  }
+
   const current = pendingDeviceCommand;
   const shouldConsume = getConsumeQueryValue(req);
   if (shouldConsume && current) {

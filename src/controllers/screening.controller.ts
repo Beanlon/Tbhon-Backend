@@ -4,7 +4,12 @@ import { prisma } from "../prisma";
 import type { InputJsonValue } from "../types/input-json";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
-import { parseDeviceCommand, queueDeviceCommand, resolveOrCreateSession } from "./iot.controller";
+import {
+  getDevicePresenceSnapshot,
+  parseDeviceCommand,
+  queueDeviceCommand,
+  resolveOrCreateSession,
+} from "./iot.controller";
 import {
   MAX_COUGH_ATTEMPTS,
   parseCoughAttemptStrict,
@@ -223,6 +228,15 @@ export async function requestIotCapture(req: AuthRequest, res: Response) {
       : undefined,
   );
   res.status(201).json({ ok: true, ...queued, sessionId: sessionId ?? null });
+}
+
+/** GET /screenings/iot/device-status — JWT alias for mobile (no IoT key required). */
+export function getIotDeviceStatus(_req: AuthRequest, res: Response) {
+  res.json({
+    ok: true,
+    time: new Date().toISOString(),
+    ...getDevicePresenceSnapshot(),
+  });
 }
 
 export async function completeScreening(req: AuthRequest, res: Response) {

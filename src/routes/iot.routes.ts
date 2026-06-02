@@ -4,7 +4,9 @@ import {
   iotDebugRecentUploads,
   iotDeviceCommand,
   iotGetDeviceCommand,
+  iotGetDeviceStatus,
   iotGetTrigger,
+  iotReportPresence,
   iotDownloadSputum,
   iotHealth,
   iotHello,
@@ -37,6 +39,8 @@ iotRouter.post("/trigger", requireIotKey, iotSetTrigger);
 iotRouter.get("/trigger", requireIotKey, iotGetTrigger);
 iotRouter.post("/device-command", requireIotKey, iotDeviceCommand);
 iotRouter.get("/device-command", requireIotKey, iotGetDeviceCommand);
+iotRouter.post("/presence", requireIotKey, iotReportPresence);
+iotRouter.get("/device-status", requireIotKey, iotGetDeviceStatus);
 
 // All upload endpoints require the shared device key.
 iotRouter.post(

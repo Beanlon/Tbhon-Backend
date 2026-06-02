@@ -6,6 +6,7 @@ import {
   deleteIncompleteScreening,
   getMyScreening,
   listMyScreenings,
+  getIotDeviceStatus,
   requestIotCapture,
 } from "../controllers/screening.controller";
 import {
@@ -24,6 +25,7 @@ export const screeningRouter = Router();
 screeningRouter.post("/", requireAuth, completeScreening);
 screeningRouter.post("/draft", requireAuth, createDraftScreening);
 screeningRouter.post("/iot/request-capture", requireAuth, requestIotCapture);
+screeningRouter.get("/iot/device-status", requireAuth, getIotDeviceStatus);
 screeningRouter.post("/cleanup-incomplete", requireAuth, cleanupIncompleteScreenings);
 screeningRouter.get("/", requireAuth, listMyScreenings);
 screeningRouter.delete("/:sessionId", requireAuth, deleteIncompleteScreening);
