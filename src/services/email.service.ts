@@ -37,6 +37,8 @@ function createTransporter(cfg: SmtpConfig): Transporter {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.port === 465,
+    // VPS droplets often lack IPv6; Node otherwise picks Gmail's AAAA record and ENETUNREACH.
+    family: 4,
     auth: {
       user: cfg.user,
       pass: cfg.pass,
