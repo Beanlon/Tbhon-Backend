@@ -9,6 +9,10 @@ type SmtpConfig = {
   pass: string;
 };
 
+function shouldLogOtpForAlpha(): boolean {
+  return process.env.EMAIL_DEV_LOG_CODE === "true";
+}
+
 function getSmtpConfig(): SmtpConfig | null {
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS?.trim();
@@ -76,7 +80,7 @@ export async function sendEmailVerificationOtp(args: {
   const smtp = getSmtpConfig();
 
   if (!smtp) {
-    if (process.env.NODE_ENV !== "production" || process.env.EMAIL_DEV_LOG_CODE === "true") {
+    if (process.env.NODE_ENV !== "production" || shouldLogOtpForAlpha()) {
       console.log(`[email] SMTP not configured — verification code for ${args.to}: ${args.code}`);
       return;
     }
@@ -102,6 +106,10 @@ export async function sendEmailVerificationOtp(args: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[email] Gmail SMTP send failed:", { to: args.to, from, message });
+    if (shouldLogOtpForAlpha()) {
+      console.log(`[email] SMTP send failed — alpha fallback code for ${args.to}: ${args.code}`);
+      return;
+    }
     throw new Error(message || "Failed to send verification email");
   }
 }
@@ -129,5 +137,10 @@ export function logEmailConfigAtStartup(): void {
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[email] Gmail SMTP verify failed:", message);
+      if (/timeout|ENETUNREACH|ECONNREFUSED|EHOSTUNREACH/i.test(message)) {
+        console.error(
+          "[email] Hint: many VPS hosts block outbound SMTP (ports 587/465). Test: timeout 5 bash -c 'echo > /dev/tcp/smtp.gmail.com/587'. Try SMTP_PORT=465, open a provider SMTP-unblock ticket, or unset SMTP_USER for EMAIL_DEV_LOG_CODE=true alpha testing.",
+        );
+      }
     });
 }
