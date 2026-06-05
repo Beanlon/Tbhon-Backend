@@ -4,9 +4,10 @@ import {
   completeScreening,
   createDraftScreening,
   deleteIncompleteScreening,
+  exportMyScreenings,
+  getIotDeviceStatus,
   getMyScreening,
   listMyScreenings,
-  getIotDeviceStatus,
   requestIotCapture,
 } from "../controllers/screening.controller";
 import {
@@ -18,6 +19,7 @@ import {
   uploadSputumImage,
 } from "../controllers/screening.media.controller";
 import { requireAuth } from "../middleware/auth.middleware";
+import { requireEmailVerified } from "../middleware/requireEmailVerified.middleware";
 import { upload } from "../utils/upload";
 
 export const screeningRouter = Router();
@@ -28,6 +30,7 @@ screeningRouter.post("/iot/request-capture", requireAuth, requestIotCapture);
 screeningRouter.get("/iot/device-status", requireAuth, getIotDeviceStatus);
 screeningRouter.post("/cleanup-incomplete", requireAuth, cleanupIncompleteScreenings);
 screeningRouter.get("/", requireAuth, listMyScreenings);
+screeningRouter.get("/export", requireAuth, requireEmailVerified, exportMyScreenings);
 screeningRouter.delete("/:sessionId", requireAuth, deleteIncompleteScreening);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This sprint delivered an end-to-end **TB screening platform** spanning a React Native (Expo) mobile app, Node.js/Express backend with MySQL persistence, a Python/FastAPI ML inference service, and ESP32 IoT device integration. Users can register, complete a guided screening session (symptoms + cough audio + sputum image), receive ML-driven risk scores with confidence outputs, and review past results across devices. The system is deployed on DigitalOcean with Cloudflare tunnels for reliable mobile HTTPS access.
+This sprint delivered the **TBhon Alpha** platform across mobile, backend, ML, IoT, and cloud infrastructure. **Cough audio capture**, **sputum/phlegm image capture**, **raw media persistence**, **risk scoring & result assembly**, and **screening results view** are verified **Done**. **IoT device setup** (in-app BLE Wi‑Fi provisioning requires native deployment build; **ESP32 firmware** uses hardcoded Wi‑Fi for bench testing—not the app) and **cough audio playback in the session details view** remain **in progress**.
 
 ---
 
@@ -13,15 +13,15 @@ This sprint delivered an end-to-end **TB screening platform** spanning a React N
 • user registration and login (JWT-backed accounts with profile data)  
 • symptom checklist capture before screening  
 • cough audio recording (3 attempts per session) with real-time quality validation  
-• sputum/phlegm image capture and upload  
+• IoT device setup *(in progress — hardware checklist + service health check in app; full BLE Wi‑Fi provisioning from phone blocked until native app deployment; **ESP32 firmware** uses hardcoded Wi‑Fi for bench testing, not the mobile app)*  
+• sputum/phlegm image capture (IoT device flow — device poll, upload, review)  
 • CNN inference integration (Mel-spectrogram cough classifier + phlegm AFB load model)  
 • detection confidence output (`prob_tb` / `prob_no_tb`, AFB load grade, risk level: low / moderate / high)  
-• IoT screening device integration (ESP32 BLE Wi‑Fi setup, remote cough/sputum capture, server polling)  
 • screening session persistence with raw media stored in the backend (MySQL via Prisma)  
 • screening history, results review, and TB education content in the mobile app  
 • cloud deployment of backend and ML inference APIs (DigitalOcean + Cloudflare tunnels)
 
-This increment implements the full **TB screening workflow**—from account sign-in through symptom intake, multimodal capture (phone or IoT device), ML analysis, risk scoring, and stored results. **Clinical treatment recommendation and care-pathway features** (personalized treatment plans, provider referrals, clinician dashboards) are **out of scope for this release** and are not part of the current product roadmap. The **next sprint** focuses on **account security and communication**: two-factor authentication, authenticated password change, email verification, and notification integration.
+This increment implements the **TB screening workflow** architecture—from account sign-in through symptom intake, multimodal capture, ML analysis, risk scoring, and stored results. **Cough capture, sputum capture, raw media storage, risk scoring, and results reporting are complete**. **IoT device setup** (pending native build for BLE/Wi‑Fi permissions) and **audio playback in the session details view** remain **in progress**. **Clinical treatment recommendation and care-pathway features** remain out of scope and are not on the current roadmap. The **next sprint** focuses on **account security and communication** (see module mapping below).
 
 ---
 
@@ -59,6 +59,16 @@ Mobile app
 
 Deliverables are organized by system module. Each feature lists its implementation status and evidence in the codebase or deployed infrastructure.
 
+### Status definitions
+
+| Status | Meaning |
+| --- | --- |
+| **Done** | Implemented and verified working in the current environment |
+| **In Progress** | Implemented in codebase but not verified end-to-end; open bugs or incomplete integration |
+| **Not Started** | Planned for a future sprint; no implementation yet |
+
+**Transparency note:** Features with open bugs, missing deployment prerequisites, or unverified E2E flow are marked **In Progress**. **IoT device setup** is implemented in the **mobile app** (`bleWifiProvisioning.ts`, hardware checklist) but BLE Wi‑Fi transfer is not fully exercisable until a **native development/EAS build** (Bluetooth permissions; not Expo Go). **Bench testing:** the **ESP32 firmware** is flashed/configured with **hardcoded Wi‑Fi credentials**—this is not an app setting. **Raw media persistence** and **sputum capture** are **Done**. The remaining open bug is **cough audio playback in the session details view**, not media storage or sputum capture.
+
 ---
 
 ### Module 1 — Core Input Module
@@ -68,11 +78,11 @@ Collects user identity, symptom data, and multimodal screening media from the ph
 | Feature | Status | Evidence |
 | --- | --- | --- |
 | Authentication (registration, login, JWT session) | Done | Mobile: `mobile/app/login/login.tsx`, `mobile/app/signUp/signUp.tsx`, `mobile/utils/authStorage.ts`. Backend: `POST /auth/register`, `POST /auth/login` in `Tbhon-Backend/src/routes/auth.routes.ts`, `src/controllers/auth.controller.ts` |
-| User profile data entry | Done | Mobile: `mobile/app/signUp/signUp.tsx` (registration fields), `mobile/app/profile/profilepage.tsx` (view/edit). Backend: `GET/PATCH /users/me`, `PUT /users/me/profile` in `src/routes/user.routes.ts`, `src/controllers/user.controller.ts` |
-| Symptom checklist interface | Done | Mobile: `mobile/app/screening/checklist.tsx`, `mobile/constants/screeningChecklist.ts`. Backend: `checklist_payload` JSON column on `ScreeningSession` in `prisma/schema.prisma`; parsed in `src/controllers/screening.controller.ts` |
-| Cough audio capture (3 attempts) | Done | Mobile: `mobile/app/screening/recording.tsx` (phone mic), `mobile/app/screening/iot-cough.tsx` (IoT device), `mobile/constants/iotScreening.ts` (`IOT_COUGH_COUNT = 3`). Quality gate: `mobile/utils/coughQualityCheck.ts` → ML `POST /check-quality` |
-| Sputum/phlegm image capture | Done | Mobile: `mobile/app/screening/phlegm.tsx` (phone camera), `mobile/app/screening/iot-sputum.tsx` (IoT device). Review step: `mobile/app/screening/review.tsx` |
-| IoT device setup input | Done | Mobile: `mobile/app/screening/iot-hardware.tsx` (hardware checklist), `mobile/services/bleWifiProvisioning.ts` (BLE scan for `ESP32-IOT-SETUP`, Wi‑Fi credential transfer), `mobile/services/iotApi.ts` (`fetchIotHealth`). Documented in `mobile/README.md` § Bluetooth |
+| User profile data entry | Done | Mobile: `mobile/app/signUp/signUp.tsx`, `mobile/app/profile/profilepage.tsx`. Backend: `GET/PATCH /users/me`, `PUT /users/me/profile` in `src/routes/user.routes.ts`, `src/controllers/user.controller.ts` |
+| Symptom checklist interface | Done | Mobile: `mobile/app/screening/checklist.tsx`, `mobile/constants/screeningChecklist.ts`. Backend: `checklist_payload` on `ScreeningSession` in `prisma/schema.prisma` |
+| Cough audio capture (3 attempts) | Done | Mobile: `mobile/app/screening/recording.tsx`, `mobile/app/screening/iot-cough.tsx`, `IOT_COUGH_COUNT = 3` in `constants/iotScreening.ts`. Quality gate: `utils/coughQualityCheck.ts` → `POST /check-quality` |
+| Sputum/phlegm image capture | Done | Mobile: `mobile/app/screening/iot-sputum.tsx`, `mobile/app/screening/phlegm.tsx`, `mobile/app/screening/review.tsx`. Backend: `iotUploadSputum` in `iot.controller.ts`, `sputum_images.raw_data`. **E2E verified — no failures** |
+| IoT device setup input | In Progress | Mobile: `mobile/app/screening/iot-hardware.tsx` (checklist, `fetchIotHealth`), `mobile/services/bleWifiProvisioning.ts` (app sends SSID/password over BLE when native build available). **Blocked:** BLE provisioning from app needs native build (not Expo Go) per `mobile/README.md`. **Bench testing:** **ESP32 firmware only** has hardcoded Wi‑Fi; app does not hardcode network credentials |
 
 ---
 
@@ -82,13 +92,13 @@ Persists data, runs screening business logic, and executes ML inference.
 
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| CRUD operations (users, sessions, media, predictions) | Done | Schema: `Tbhon-Backend/prisma/schema.prisma` (10 models: `User`, `ScreeningSession`, `CoughRecording`, `SputumImage`, `TbAudioPrediction`, `PhlegmPrediction`, etc.). Routes: `src/routes/auth.routes.ts`, `user.routes.ts`, `screening.routes.ts` |
-| Screening session business logic | Done | `src/controllers/screening.controller.ts` — `createDraftScreening`, `completeScreening`, `listMyScreenings`, `getMyScreening`, `deleteIncompleteScreening`. Slot logic: `src/utils/coughAttempt.ts` (`MAX_COUGH_ATTEMPTS`, upsert per session slot). Cleanup: `src/services/incompleteScreeningCleanup.ts` |
-| Raw media persistence | Done | `src/controllers/screening.media.controller.ts` — `attachCoughRecordingRaw`, `attachSputumImageRaw`, `downloadCoughRecording`, `downloadSputumImage`. DB columns: `cough_recordings.raw_data`, `sputum_images.raw_data` in `schema.prisma` |
-| ML inference engine — cough | Done | `Tbhon/ml/infer_api.py` — `POST /check-quality` (cough authenticity metrics), `POST /predict` (Mel-spectrogram CNN → `prob_tb`, `prob_no_tb`). Training: `ml/train_tb_cough_cnn.py`, weights under `ml/runs/` |
-| ML inference engine — sputum | Done | `Tbhon/ml/infer_api.py` — `POST /predict-phlegm` (AFB load: none / low / moderate / high). Model training: `Tbhon/ml (phlegm)/train_phlegm_cnn.py` |
-| Risk scoring & result assembly | Done | Mobile merge logic: `mobile/app/screening/processing.tsx` (`mergeRisk`, cough `/predict` + phlegm `/predict-phlegm`). Backend persist: `completeScreening` in `screening.controller.ts` writes `ScreeningResult`, `TbAudioPrediction`, `PhlegmPrediction` rows |
-| IoT upload processing | Done | `src/controllers/iot.controller.ts` — `iotUploadCough`, `iotUploadSputum`, `queueDeviceCommand`, `iotDeviceCommand`, `iotGetDeviceCommand`. Routes: `src/routes/iot.routes.ts` (`/iot/cough-recordings`, `/iot/sputum-images`, `/iot/device-command`). Auth: `src/middleware/iot.middleware.ts` (`X-IoT-Key`) |
+| CRUD operations (users, sessions, media, predictions) | Done | Schema: `Tbhon-Backend/prisma/schema.prisma` (10 models). Routes: `src/routes/auth.routes.ts`, `user.routes.ts`, `screening.routes.ts` |
+| Screening session business logic | In Progress | `src/controllers/screening.controller.ts` — draft/complete/list/get. Slot logic: `src/utils/coughAttempt.ts`. **Core flow works; full E2E sign-off pending details playback fix** |
+| Raw media persistence | Done | `src/controllers/screening.media.controller.ts` — `attachCoughRecordingRaw`, `attachSputumImageRaw`, `downloadCoughRecording`, `downloadSputumImage`. DB: `cough_recordings.raw_data`, `sputum_images.raw_data` in `schema.prisma`. Store and download verified |
+| ML inference engine — cough | Done | `Tbhon/ml/infer_api.py` — `POST /check-quality`, `POST /predict`. Training: `ml/train_tb_cough_cnn.py`. **API responds in isolation** (`ml/smoke_test_infer.py`, `/healthz`) |
+| ML inference engine — sputum | Done | `Tbhon/ml/infer_api.py` — `POST /predict-phlegm`. Training: `Tbhon/ml (phlegm)/train_phlegm_cnn.py`. **E2E verified via processing screen** |
+| Risk scoring & result assembly | Done | Mobile: `mobile/app/screening/processing.tsx` (`mergeRisk`, cough `/predict` + phlegm `/predict-phlegm`). Backend: `completeScreening` in `screening.controller.ts` writes `ScreeningResult`, `TbAudioPrediction`, `PhlegmPrediction` |
+| IoT upload processing | Done | `src/controllers/iot.controller.ts` — `iotUploadCough`, `iotUploadSputum`. Routes: `src/routes/iot.routes.ts`. **Cough and sputum device uploads verified** |
 
 ---
 
@@ -98,13 +108,13 @@ Presents screening outcomes, history, and educational content to the user.
 
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| Screening results view | Done | `mobile/app/screening/result.tsx` — `RISK_CONFIG` (low / moderate / high), TB probability display, phlegm load grade, confidence, guidance text. Backend result stored in `screening_results` table |
-| Detailed session report | Done | `mobile/app/screening/details.tsx` — cough attempt breakdown, quality badges (`mobile/components/CoughQualityBadge.tsx`), sputum sample (`mobile/app/components/SputumSamplePhoto.tsx`), checklist recap, audio/image replay via `buildServerSputumImageUrl` / download endpoints |
-| Screening history | Done | `mobile/app/history/HistoryScreen.tsx` — calls `listMyScreenings()` from `mobile/services/backendApi.ts`; maps to `GET /screenings`. Cache: `mobile/utils/screeningHistoryCache.ts` |
-| Home dashboard visualization | Done | `mobile/app/home/HomeScreen.tsx` — service tiles, bottom nav. Quick preview: `mobile/app/home/quickResultPreview/QuickResultPreviewCard.tsx`, `GaugeChart.tsx` |
-| TB education content | Done | `mobile/app/learn/LearnContent.tsx` — symptoms, prevention, treatment awareness cards. Rendered from Home tab via `HomeScreen.tsx` |
-
-*Notification outputs are not included in this sprint; planned for next sprint.*
+| Screening results view | Done | `mobile/app/screening/result.tsx` — `RISK_CONFIG` (low / moderate / high), TB probability, phlegm load grade, confidence, guidance text. Backend: `screening_results` table |
+| Detailed session report | Done | `mobile/app/screening/details.tsx` — cough breakdown, `CoughQualityBadge.tsx`, `SputumSamplePhoto.tsx`, checklist recap, sputum image display |
+| Cough audio playback (session details) | In Progress | `mobile/app/screening/details.tsx` — `playAudioAt()` via Expo AV (`Audio.Sound.loadAsync`). **Open bug: playback fails in details view; raw media storage/download is Done** |
+| Screening history | Done | `mobile/app/history/HistoryScreen.tsx` → `GET /screenings` via `backendApi.ts`. Cache: `mobile/utils/screeningHistoryCache.ts` |
+| Home dashboard visualization | Done | `mobile/app/home/HomeScreen.tsx`, `QuickResultPreviewCard.tsx`, `GaugeChart.tsx` |
+| TB education content | Done | `mobile/app/learn/LearnContent.tsx` |
+| Notification outputs | Not Started | Planned for next sprint — see **Next sprint module mapping** below |
 
 ---
 
@@ -114,13 +124,14 @@ Connects the mobile app, backend, ML service, IoT hardware, and cloud infrastruc
 
 | Feature | Status | Evidence |
 | --- | --- | --- |
-| Mobile ↔ backend API | Done | `mobile/services/backendApi.ts` — `apiRequest()`, auth/screening/media helpers. Base URL: `EXPO_PUBLIC_API_URL` via `mobile/utils/apiBaseUrl.ts`. Mobile env: `mobile/.env` |
-| Mobile ↔ ML API | Done | `mobile/app/screening/processing.tsx` — multipart POST to `/predict` and `/predict-phlegm`. Base URL: `EXPO_PUBLIC_TB_API_URL` via `mobile/utils/tbApiUrl.ts` |
-| IoT device API | Done | `Tbhon-Backend/src/routes/iot.routes.ts` — `/iot/health`, `/iot/cough-recordings`, `/iot/sputum-images`, `/iot/device-command`, `/iot/trigger`. Shared secret: `IOT_API_KEY` in backend `.env` |
-| ESP32 ↔ backend integration | Done | Mobile queues commands: `queueIotDeviceAudioStartCommand`, `pollForNewCoughRecording` in `mobile/services/backendApi.ts`. Device uploads handled in `iot.controller.ts`. Mobile polling: `mobile/app/screening/iot-cough.tsx`, `iot-sputum.tsx` |
-| Cloud deployment | Done | Backend droplet: `Tbhon-Backend/docs/02-backend-droplet-setup.md` (PM2, port 4000). ML droplet: `docs/07-ml-droplet-setup.md` (systemd uvicorn, port 8000). Database: `docs/03-database-setup.md` (DigitalOcean Managed MySQL + TLS) |
-| HTTPS tunnel integration | Done | `Tbhon-Backend/docs/08-cloudflare-tunnels.md` — `tbhon-backend-tunnel` → `:4000`, `tbhon-ml-tunnel` → `:8000`. Architecture overview: `docs/01-how-it-works.md` |
-| API documentation | Done | `Tbhon-Backend/src/openapi.ts` (full OpenAPI 3 spec). Served at `/docs` (Swagger UI) and `/docs.json` via `src/app.ts` |
+| Mobile ↔ backend API | Done | `mobile/services/backendApi.ts`, `EXPO_PUBLIC_API_URL` via `mobile/utils/apiBaseUrl.ts` |
+| Mobile ↔ ML API | Done | `mobile/app/screening/processing.tsx` → `/predict`, `/predict-phlegm`; `EXPO_PUBLIC_TB_API_URL` via `mobile/utils/tbApiUrl.ts`. **E2E verified with cough + sputum capture** |
+| IoT device API | Done | `Tbhon-Backend/src/routes/iot.routes.ts` — `/iot/health`, uploads, commands. Auth: `IOT_API_KEY`, `src/middleware/iot.middleware.ts` |
+| ESP32 ↔ backend integration | Done | `backendApi.ts` command/poll helpers; `iot-cough.tsx`, `iot-sputum.tsx`; `iot.controller.ts`. **Cough and sputum device capture/upload verified** |
+| Cloud deployment | Done | `docs/02-backend-droplet-setup.md`, `07-ml-droplet-setup.md`, `03-database-setup.md` |
+| HTTPS tunnel integration | Done | `docs/08-cloudflare-tunnels.md`, `docs/01-how-it-works.md` |
+| API documentation | Done | `src/openapi.ts`; `/docs` Swagger UI in `src/app.ts` |
+| Email / push provider integration | Not Started | Planned for next sprint — see **Next sprint module mapping** below |
 
 ---
 
@@ -152,14 +163,25 @@ Connects the mobile app, backend, ML service, IoT hardware, and cloud infrastruc
 
 The app displays **risk-tier guidance text** (low / moderate / high) as part of screening results. That is informational output from the screening workflow, not a clinical care-pathway or treatment system.
 
-### Planned for next sprint
+### Planned for next sprint — module mapping
 
-| Item | Description |
-| --- | --- |
-| Two-factor authentication (2FA) | Additional account security layer at login |
-| Authenticated password change | Password update for signed-in users |
-| Email verification | Verify user email addresses on registration or change |
-| Notification integration | Push or in-app notifications for account and screening events |
+Next-sprint work spans **three modules**. No next-sprint item is **Done** yet.
+
+| Feature | Primary module | Secondary module | What gets built |
+| --- | --- | --- | --- |
+| Two-factor authentication (2FA) | **Module 1 — Core Input** | **Module 2 — Core Processing** | Login/verification UI (OTP entry, setup flow); backend token generation, validation, and 2FA state storage |
+| Authenticated password change | **Module 1 — Core Input** | **Module 2 — Core Processing** | Password change screen for signed-in users; backend verifies current password before hashing and storing the new one |
+| Email verification | **Module 1 — Core Input** | **Module 4 — Integration** | Verification prompt/link UI on registration or email change; external email delivery service wired through backend |
+| Notification integration | **Module 3 — Output** | **Module 4 — Integration** | In-app or push notification surfaces for account and screening events; FCM/APNs or equivalent provider connected via backend |
+
+```text
+Module 1 (Input)          Module 2 (Processing)     Module 3 (Output)        Module 4 (Integration)
+─────────────────         ───────────────────────     ─────────────────        ──────────────────────
+2FA login UI        →     2FA verify/store logic
+Password change UI  →     Password update logic
+Email verify UI     →                               →                          → email provider
+                                                      notification UI    →     → push provider
+```
 
 ### Other deferred work (not next sprint)
 
@@ -172,10 +194,51 @@ The app displays **risk-tier guidance text** (low / moderate / high) as part of 
 
 ---
 
-## Known Issues & Technical Debt
+## Module 1 — Core Input Module (Summary)
 
+**Purpose:** Collect user identity, symptom data, and multimodal screening media from the phone or IoT device.
+
+| Metric | Count |
+| --- | ---: |
+| Features | 6 |
+| **Done** | 5 |
+| **In Progress** | 1 |
+
+| Feature | Status | Notes |
+| --- | --- | --- |
+| Authentication (registration, login, JWT session) | **Done** | `login.tsx`, `signUp.tsx`, `authStorage.ts`; `POST /auth/register`, `POST /auth/login` |
+| User profile data entry | **Done** | Sign-up + profile edit; `GET/PATCH /users/me`, `PUT /users/me/profile` |
+| Symptom checklist interface | **Done** | 11-question yes/no flow; `checklist_payload` persisted on session |
+| Cough audio capture (3 attempts) | **Done** | Phone (`recording.tsx`) + IoT (`iot-cough.tsx`); quality gate via `POST /check-quality` |
+| Sputum/phlegm image capture | **Done** | `iot-sputum.tsx`, `phlegm.tsx`, `review.tsx` → `processing.tsx` `/predict-phlegm`; IoT upload to backend verified |
+| IoT device setup input | **In Progress** | App: checklist + `/iot/health`. App BLE Wi‑Fi (`bleWifiProvisioning.ts`) blocked until native build. **ESP32 firmware** uses hardcoded Wi‑Fi for testing—not the app |
+
+**Module 1 readiness:** Account intake, cough capture, and sputum capture are production-ready for this sprint. **In-app BLE Wi‑Fi provisioning** (phone → ESP32) remains blocked until a native app build. Bench tests rely on **hardcoded Wi‑Fi in ESP32 firmware**, not in the mobile app.
+
+---
+
+## Known Issues Log
+
+| Issue | Severity | Planned Fix |
+| --- | --- | --- |
+| Cough audio playback fails in session details view (`details.tsx` `playAudioAt`) despite raw media storing correctly | **High** | Fix Expo AV playback URI/headers for server-downloaded cough clips; verify replay from `GET .../cough-recordings/.../file` |
+| IoT BLE Wi‑Fi provisioning cannot be used in Expo Go; requires native build for Bluetooth scan and credential write from the **app** | **High** | Produce **EAS / development build**; exercise `scanAndConnectEsp32Setup()` from app; optionally update **ESP32 firmware** to accept BLE-provisioned Wi‑Fi instead of hardcoded credentials |
+| IoT device setup incomplete in current environment — cannot fully exercise Bluetooth + in-app Wi‑Fi setup | **Medium** | Native deployment + OS Bluetooth permissions; tester setup guide |
+| Screening session completion not verified E2E end-to-end | **Medium** | Re-test full draft → complete flow after details playback fix |
+| Cloudflare quick tunnel URLs rotate on restart; mobile `.env` must be updated manually | **Medium** | Named Cloudflare tunnels with stable hostnames (`docs/08-cloudflare-tunnels.md`) |
+| Cough ML model ~51% macro F1 — integration only, not clinically validated | **Medium** | Retrain/evaluate; document limits (not same-sprint blocker) |
+| JWT client-persisted only; no refresh-token rotation or session revocation | **Low** | **Next sprint:** 2FA, password change, email verification, token hardening |
+| No automated E2E or unit test suite for screening flow | **Low** | Add smoke/E2E tests after remaining bugs stabilized |
+| Dual capture paths (phone mic vs IoT) increase test surface; IoT primary from home | **Low** | Document test matrix; narrow fallbacks once IoT provisioning stable |
+
+---
+
+## Known Issues & Technical Debt (reference)
+
+- **IoT device setup (deployment dependency):** App has checklist UI, `GET /iot/health`, and `bleWifiProvisioning.ts` (BLE Wi‑Fi write). Full app-side provisioning needs a **native build** (EAS/dev client)—Expo Go lacks Bluetooth access. **Bench workaround:** **ESP32 firmware** is programmed with **hardcoded Wi‑Fi**; the mobile app does not store or hardcode SSID/password.
+- **Open bugs (in progress):** **Cough audio playback in session details view** (`details.tsx`) — playback fails; **raw media persistence and sputum capture are Done**.
 - **Tunnel URL rotation:** Cloudflare quick tunnel URLs change on restart; mobile `.env` must be updated manually until named tunnels are configured.
-- **Auth hardening:** No refresh-token flow, 2FA, or email verification yet — all planned for next sprint.
+- **Auth hardening:** No 2FA, email verification, or authenticated password change yet — planned for next sprint (Module 1 + 2 + 4).
 - **ML accuracy:** Cough model performance (~51% macro F1) is adequate for pipeline testing but not for standalone clinical use.
 - **Dual capture paths:** Phone and IoT flows coexist; IoT is the primary path from home; phone recording remains as fallback in review routing.
 - **iOS/cellular networking:** Resolved via HTTPS tunnels; LAN-only ML URLs fail on carrier data (by design, documented).
@@ -186,11 +249,19 @@ The app displays **risk-tier guidance text** (low / moderate / high) as part of 
 
 | Area | Method | Result |
 | --- | --- | --- |
-| Backend API | Swagger UI + manual calls | Auth, screening, media routes exercised |
-| ML API | `smoke_test_infer.py`, `/healthz` | Inference endpoints respond |
-| Mobile ↔ backend | Dev builds against tunnel URLs | Registration, screening completion, history |
-| IoT uploads | Device key + debug endpoint | Cough/sputum received and linked to sessions |
-| Cross-device media | Download endpoints with bearer token | Audio/image replay on second device |
+| Backend API | Swagger UI + manual calls | Auth, user, and listing routes verified |
+| ML API | `smoke_test_infer.py`, `/healthz` | Inference endpoints respond in isolation |
+| Mobile ↔ backend | Dev builds against tunnel URLs | Registration, login, profile, history listing verified |
+| Cough audio capture | Manual device testing | **Done** — phone and IoT cough flow verified |
+| IoT device setup | Hardware checklist + `/iot/health` | **Partial** — UI and service probe work |
+| IoT BLE Wi‑Fi provisioning | `bleWifiProvisioning.ts` (app) | **In progress** — requires native app build; **ESP32 firmware** uses hardcoded Wi‑Fi for bench tests |
+| Risk scoring & result assembly | Processing screen + `completeScreening` | **Done** — cough/phlegm merge and result persist verified |
+| Raw media persistence | Upload attach + download endpoints | **Done** — `raw_data` stored and retrievable |
+| Screening results view | Result screen after processing | **Done** |
+| Detailed session report | Details layout and data display | **Done** |
+| Cough audio playback (session details) | Tap-to-play in `details.tsx` | **In progress — open playback bug** |
+| Sputum capture E2E | Manual device testing | **Done** — IoT poll, upload, review → processing verified |
+| IoT sputum uploads | Device key + debug endpoint | **Done** — `POST /iot/sputum-images` linked to session |
 
 Automated E2E and unit test suites are not yet in place for this sprint.
 
@@ -212,6 +283,6 @@ Automated E2E and unit test suites are not yet in place for this sprint.
 
 ## Conclusion
 
-The sprint successfully integrated all major subsystems into a working **Alpha** release: mobile UX, backend persistence, dual ML models, IoT hardware path, and cloud deployment. The product supports a complete user journey from login to stored screening results with confidence-based risk output.
+This sprint established the **TBhon Alpha** platform: mobile app shell, backend persistence, ML inference APIs, IoT API surface, and cloud deployment. **Cough audio capture**, **sputum capture**, **raw media persistence**, **risk scoring**, and **results reporting** are verified **Done**. **IoT device setup** (pending native build for BLE/Wi‑Fi) and **details-view audio playback** remain **In Progress**.
 
-Clinical treatment and care-pathway capabilities remain outside the current scope. The next sprint will strengthen the platform with **two-factor authentication, authenticated password change, email verification, and notification integration**.
+Clinical treatment and care-pathway capabilities remain outside the current scope. The next sprint adds **account security and communication** features mapped across **Modules 1, 2, 3, and 4**: two-factor authentication, authenticated password change, email verification, and notification integration.

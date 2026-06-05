@@ -11,6 +11,12 @@ model User {
   email        String?  @unique @db.VarChar(255)
   phoneNumber  String?  @map("phone_number") @db.VarChar(30)
   passwordHash String   @map("password_hash") @db.VarChar(255)
+  emailVerified                   Boolean   @default(false) @map("email_verified")
+  emailVerifiedAt                 DateTime? @map("email_verified_at")
+  emailVerificationCodeHash       String?   @map("email_verification_code_hash") @db.VarChar(255)
+  emailVerificationExpiresAt      DateTime? @map("email_verification_expires_at")
+  emailVerificationSentAt         DateTime? @map("email_verification_sent_at")
+  emailVerificationAttemptCount   Int       @default(0) @map("email_verification_attempt_count")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

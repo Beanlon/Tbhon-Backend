@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma";
+import { sendEmailVerificationForUser } from "./emailVerification.controller";
 import { signAuthToken } from "../utils/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
@@ -9,6 +10,8 @@ function toUserResponse(user: {
   userId: string;
   email: string | null;
   phoneNumber: string | null;
+  emailVerified: boolean;
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   profile?: unknown;
@@ -17,6 +20,8 @@ function toUserResponse(user: {
     userId: user.userId,
     email: user.email,
     phoneNumber: user.phoneNumber,
+    emailVerified: user.emailVerified,
+    emailVerifiedAt: user.emailVerifiedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     profile: user.profile ?? null,
@@ -65,9 +70,16 @@ export async function register(req: Request, res: Response) {
 
   const token = signAuthToken({ userId: user.userId });
 
+  try {
+    await sendEmailVerificationForUser(user.userId, email);
+  } catch (err) {
+    console.error("[auth] Failed to send registration verification email:", err);
+  }
+
   res.status(201).json({
     token,
     user: toUserResponse(user),
+    emailVerificationSent: true,
   });
 }
 
