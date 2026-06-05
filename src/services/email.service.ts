@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import type Transporter from "nodemailer/lib/mailer";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
 type SmtpConfig = {
   host: string;
@@ -33,7 +34,8 @@ function getFromAddress(): string {
 }
 
 function createTransporter(cfg: SmtpConfig): Transporter {
-  return nodemailer.createTransport({
+  // family is supported at runtime but missing from @types/nodemailer SMTPConnection.Options.
+  const options = {
     host: cfg.host,
     port: cfg.port,
     secure: cfg.port === 465,
@@ -43,7 +45,9 @@ function createTransporter(cfg: SmtpConfig): Transporter {
       user: cfg.user,
       pass: cfg.pass,
     },
-  });
+  } as SMTPTransport.Options;
+
+  return nodemailer.createTransport(options);
 }
 
 export async function sendEmailVerificationOtp(args: {
