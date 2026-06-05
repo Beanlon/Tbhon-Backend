@@ -70,8 +70,10 @@ export async function register(req: Request, res: Response) {
 
   const token = signAuthToken({ userId: user.userId });
 
+  let emailVerificationSent = false;
   try {
     await sendEmailVerificationForUser(user.userId, email);
+    emailVerificationSent = true;
   } catch (err) {
     console.error("[auth] Failed to send registration verification email:", err);
   }
@@ -79,7 +81,7 @@ export async function register(req: Request, res: Response) {
   res.status(201).json({
     token,
     user: toUserResponse(user),
-    emailVerificationSent: true,
+    emailVerificationSent,
   });
 }
 
