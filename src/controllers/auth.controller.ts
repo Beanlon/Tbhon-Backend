@@ -2,7 +2,12 @@ import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma";
 import { sendEmailVerificationForUser } from "./emailVerification.controller";
-import { signAuthToken } from "../utils/auth";
+import {
+  createRefreshToken,
+  revokeRefreshToken,
+  rotateRefreshToken,
+} from "../services/refreshToken.service";
+import { signAccessToken } from "../utils/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
 
@@ -25,6 +30,21 @@ function toUserResponse(user: {
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     profile: user.profile ?? null,
+  };
+}
+
+async function issueAuthSession(userId: string) {
+  const accessToken = signAccessToken({ userId });
+  const refreshToken = await createRefreshToken(userId);
+  return { accessToken, refreshToken, token: accessToken };
+}
+
+function toAuthResponse(session: { accessToken: string; refreshToken: string; token: string }, user: unknown) {
+  return {
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    token: session.token,
+    user,
   };
 }
 
@@ -68,7 +88,7 @@ export async function register(req: Request, res: Response) {
     },
   });
 
-  const token = signAuthToken({ userId: user.userId });
+  const session = await issueAuthSession(user.userId);
 
   let emailVerificationSent = false;
   try {
@@ -79,8 +99,7 @@ export async function register(req: Request, res: Response) {
   }
 
   res.status(201).json({
-    token,
-    user: toUserResponse(user),
+    ...toAuthResponse(session, toUserResponse(user)),
     emailVerificationSent,
   });
 }
@@ -114,10 +133,46 @@ export async function login(req: Request, res: Response) {
     throw new HttpError(401, "Invalid email or password");
   }
 
-  const token = signAuthToken({ userId: user.userId });
+  const session = await issueAuthSession(user.userId);
 
-  res.json({
-    token,
-    user: toUserResponse(user),
-  });
+  res.json(toAuthResponse(session, toUserResponse(user)));
+}
+
+/** Exchange a refresh token for a new access + refresh token pair (rotation). */
+export async function refreshSession(req: Request, res: Response) {
+  if (!isRecord(req.body)) {
+    throw new HttpError(400, "Request body is required");
+  }
+
+  const refreshToken = getString(req.body.refreshToken);
+  if (!refreshToken) {
+    throw new HttpError(400, "refreshToken is required");
+  }
+
+  try {
+    const rotated = await rotateRefreshToken(refreshToken);
+    const accessToken = signAccessToken({ userId: rotated.userId });
+    res.json({
+      accessToken,
+      refreshToken: rotated.refreshToken,
+      token: accessToken,
+    });
+  } catch {
+    throw new HttpError(401, "Invalid or expired refresh token");
+  }
+}
+
+/** Revoke the current refresh token (logout). */
+export async function logout(req: Request, res: Response) {
+  if (!isRecord(req.body)) {
+    throw new HttpError(400, "Request body is required");
+  }
+
+  const refreshToken = getString(req.body.refreshToken);
+  if (!refreshToken) {
+    throw new HttpError(400, "refreshToken is required");
+  }
+
+  await revokeRefreshToken(refreshToken);
+  res.json({ ok: true, message: "Logged out" });
 }

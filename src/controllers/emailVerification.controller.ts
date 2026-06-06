@@ -49,6 +49,8 @@ async function issueVerificationCode(userId: string, email: string) {
     },
   });
 
+  console.log("[email] Issuing verification OTP:", { userId, to: email });
+
   await sendEmailVerificationOtp({
     to: email,
     code,

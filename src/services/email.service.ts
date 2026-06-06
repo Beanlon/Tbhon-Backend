@@ -67,7 +67,7 @@ function getFromAddress(): string {
   return "TBhon <noreply@tbhon.local>";
 }
 
-function buildOtpEmailContent(args: { code: string; ttlMinutes: number }): OtpEmailContent {
+function buildVerificationOtpEmailContent(args: { code: string; ttlMinutes: number }): OtpEmailContent {
   const subject = "Your TBhon verification code";
   const text = [
     "Verify your email for TBhon",
@@ -83,6 +83,27 @@ function buildOtpEmailContent(args: { code: string; ttlMinutes: number }): OtpEm
     <p style="font-size:28px;font-weight:bold;letter-spacing:4px;margin:16px 0;">${args.code}</p>
     <p>This code expires in <strong>${args.ttlMinutes} minutes</strong>.</p>
     <p style="color:#666;font-size:13px;">If you did not create a TBhon account, you can ignore this email.</p>
+  `.trim();
+
+  return { subject, text, html };
+}
+
+function buildPasswordResetOtpEmailContent(args: { code: string; ttlMinutes: number }): OtpEmailContent {
+  const subject = "Your TBhon password reset code";
+  const text = [
+    "Reset your TBhon password",
+    "",
+    `Your password reset code is: ${args.code}`,
+    "",
+    `This code expires in ${args.ttlMinutes} minutes.`,
+    "If you did not request a password reset, you can ignore this email.",
+  ].join("\n");
+
+  const html = `
+    <p>Reset your password for <strong>TBhon</strong>.</p>
+    <p style="font-size:28px;font-weight:bold;letter-spacing:4px;margin:16px 0;">${args.code}</p>
+    <p>This code expires in <strong>${args.ttlMinutes} minutes</strong>.</p>
+    <p style="color:#666;font-size:13px;">If you did not request a password reset, you can ignore this email.</p>
   `.trim();
 
   return { subject, text, html };
@@ -180,7 +201,7 @@ export async function sendEmailVerificationOtp(args: {
   code: string;
   ttlMinutes: number;
 }): Promise<void> {
-  const content = buildOtpEmailContent(args);
+  const content = buildVerificationOtpEmailContent(args);
   const from = getFromAddress();
   const brevoApiKey = getBrevoApiKey();
   const smtp = getSmtpConfig();
@@ -217,6 +238,51 @@ export async function sendEmailVerificationOtp(args: {
     }
 
     throw new Error(message || "Failed to send verification email");
+  }
+}
+
+export async function sendPasswordResetOtp(args: {
+  to: string;
+  code: string;
+  ttlMinutes: number;
+}): Promise<void> {
+  const content = buildPasswordResetOtpEmailContent(args);
+  const from = getFromAddress();
+  const brevoApiKey = getBrevoApiKey();
+  const smtp = getSmtpConfig();
+
+  if (!brevoApiKey && !smtp) {
+    if (process.env.NODE_ENV !== "production" || shouldLogOtpForAlpha()) {
+      logAlphaFallback(args.to, args.code, "Email provider not configured (password reset)");
+      return;
+    }
+    throw new Error("BREVO_API_KEY or SMTP_USER/SMTP_PASS is required to send password reset emails");
+  }
+
+  try {
+    const result = brevoApiKey
+      ? await sendViaBrevo({ to: args.to, content })
+      : await sendViaSmtp({ to: args.to, content });
+
+    console.log(`[email] ${brevoApiKey ? "Brevo" : "SMTP"} sent password reset email:`, {
+      to: args.to,
+      from,
+      messageId: result.messageId,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[email] ${brevoApiKey ? "Brevo" : "SMTP"} password reset send failed:`, {
+      to: args.to,
+      from,
+      message,
+    });
+
+    if (shouldLogOtpForAlpha()) {
+      logAlphaFallback(args.to, args.code, "Password reset email send failed");
+      return;
+    }
+
+    throw new Error(message || "Failed to send password reset email");
   }
 }
 

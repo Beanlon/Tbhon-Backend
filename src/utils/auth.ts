@@ -1,8 +1,6 @@
 import jwt from "jsonwebtoken";
 import type { SignOptions } from "jsonwebtoken";
 
-const jwtExpiresIn = (process.env.JWT_EXPIRES_IN ?? "7d") as NonNullable<SignOptions["expiresIn"]>;
-
 function getJwtSecret() {
   const jwtSecret = process.env.JWT_SECRET;
 
@@ -13,15 +11,22 @@ function getJwtSecret() {
   return jwtSecret;
 }
 
+const accessExpiresIn = (process.env.JWT_ACCESS_EXPIRES_IN ??
+  process.env.JWT_EXPIRES_IN ??
+  "15m") as NonNullable<SignOptions["expiresIn"]>;
+
 export type JwtPayload = {
   userId: string;
 };
 
-export function signAuthToken(payload: JwtPayload) {
+export function signAccessToken(payload: JwtPayload) {
   return jwt.sign(payload, getJwtSecret(), {
-    expiresIn: jwtExpiresIn,
+    expiresIn: accessExpiresIn,
   });
 }
+
+/** @deprecated Use signAccessToken — kept as alias for existing imports. */
+export const signAuthToken = signAccessToken;
 
 export function verifyAuthToken(token: string): JwtPayload {
   const payload = jwt.verify(token, getJwtSecret());
