@@ -550,6 +550,64 @@ export async function listMyScreenings(req: AuthRequest, res: Response) {
   res.json({ screenings: rows });
 }
 
+function csvEscape(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return "";
+  const s = String(value);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function riskLabel(raw: string | null | undefined): string {
+  const s = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (s === "moderate") return "Moderate";
+  if (s === "high") return "High";
+  return "Low";
+}
+
+/** CSV export for verified accounts (history download). */
+export async function exportMyScreenings(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const limit = 500;
+
+  const rows = await prisma.screeningSession.findMany({
+    where: { userId, completedAt: { not: null } },
+    orderBy: { completedAt: "desc" },
+    take: limit,
+    select: {
+      sessionId: true,
+      completedAt: true,
+      finalRiskLevel: true,
+      averageTbProbability: true,
+      result: { select: { riskLevel: true } },
+    },
+  });
+
+  const header =
+    "session_id,completed_at_utc,risk_level,tb_probability_percent,disclaimer";
+  const disclaimer =
+    "Screening aid only — not a medical diagnosis. Consult a healthcare professional.";
+  const lines = rows.map((row) => {
+    const risk = riskLabel(row.finalRiskLevel ?? row.result?.riskLevel);
+    const completed = row.completedAt?.toISOString() ?? "";
+    const prob =
+      typeof row.averageTbProbability === "number" && Number.isFinite(row.averageTbProbability)
+        ? (row.averageTbProbability * 100).toFixed(1)
+        : "";
+    return [
+      csvEscape(row.sessionId),
+      csvEscape(completed),
+      csvEscape(risk),
+      csvEscape(prob),
+      csvEscape(disclaimer),
+    ].join(",");
+  });
+
+  const csv = [header, ...lines].join("\n");
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="tbhon-screening-history.csv"');
+  res.send(csv);
+}
+
 export async function getMyScreening(req: AuthRequest, res: Response) {
   const userId = authenticatedUserId(req);
   const sessionId = getString(req.params.sessionId);

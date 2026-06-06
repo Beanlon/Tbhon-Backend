@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "gmail:oauth-setup": "ts-node --transpile-only src/scripts/gmail-oauth-setup.ts"
   },
   "repository": {
     "type": "git",
@@ -32,7 +33,9 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.2",
+    "googleapis": "^171.4.0",
     "multer": "^2.1.1",
+    "nodemailer": "^8.0.10",
     "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
@@ -40,8 +43,10 @@
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^25.6.2",
+    "@types/nodemailer": "^8.0.0",
     "@types/swagger-ui-express": "^4.1.8",
     "prisma": "^7.8.0",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^6.0.3"
   }

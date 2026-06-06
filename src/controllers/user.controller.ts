@@ -18,6 +18,8 @@ function toUserResponse(user: {
   userId: string;
   email: string | null;
   phoneNumber: string | null;
+  emailVerified: boolean;
+  emailVerifiedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   profile?: unknown;
@@ -26,6 +28,8 @@ function toUserResponse(user: {
     userId: user.userId,
     email: user.email,
     phoneNumber: user.phoneNumber,
+    emailVerified: user.emailVerified,
+    emailVerifiedAt: user.emailVerifiedAt,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     profile: user.profile ?? null,
@@ -73,18 +77,31 @@ export async function updateMe(req: AuthRequest, res: Response) {
     }
   }
 
-  const user = await prisma.user.update({
+  const user = await prisma.user.findUnique({ where: { userId }, select: { email: true } });
+  const emailChanged = Boolean(email && user?.email !== email);
+
+  const updated = await prisma.user.update({
     where: { userId },
     data: {
       ...(email ? { email } : {}),
       ...(phoneNumber ? { phoneNumber } : {}),
+      ...(emailChanged
+        ? {
+            emailVerified: false,
+            emailVerifiedAt: null,
+            emailVerificationCodeHash: null,
+            emailVerificationExpiresAt: null,
+            emailVerificationSentAt: null,
+            emailVerificationAttemptCount: 0,
+          }
+        : {}),
     },
     include: {
       profile: true,
     },
   });
 
-  res.json({ user: toUserResponse(user) });
+  res.json({ user: toUserResponse(updated) });
 }
 
 export async function upsertMyProfile(req: AuthRequest, res: Response) {
