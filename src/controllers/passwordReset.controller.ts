@@ -66,6 +66,38 @@ async function issuePasswordResetCode(userId: string, email: string) {
   return { expiresAt, ttlMinutes: verificationTtlMinutes() };
 }
 
+async function validatePasswordResetCode(userId: string, code: string): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { userId },
+    select: {
+      passwordResetCodeHash: true,
+      passwordResetExpiresAt: true,
+      passwordResetAttemptCount: true,
+    },
+  });
+
+  if (!user) {
+    throw new HttpError(404, "User not found");
+  }
+
+  if (isVerificationExpired(user.passwordResetExpiresAt)) {
+    throw new HttpError(400, "Reset code has expired. Request a new code.");
+  }
+
+  if (user.passwordResetAttemptCount >= maxVerifyAttempts()) {
+    throw new HttpError(429, "Too many failed attempts. Request a new code.");
+  }
+
+  const valid = await verifyVerificationCode(code, user.passwordResetCodeHash);
+  if (!valid) {
+    await prisma.user.update({
+      where: { userId },
+      data: { passwordResetAttemptCount: { increment: 1 } },
+    });
+    throw new HttpError(400, "Invalid reset code");
+  }
+}
+
 async function applyPasswordReset(userId: string, code: string, newPassword: string) {
   const user = await prisma.user.findUnique({
     where: { userId },
@@ -181,6 +213,33 @@ export async function resetPassword(req: Request, res: Response) {
   res.json({ ok: true, message: "Password updated successfully" });
 }
 
+/** Check reset code before showing the new-password form (logged out). */
+export async function verifyForgotPasswordCode(req: Request, res: Response) {
+  if (!isRecord(req.body)) {
+    throw new HttpError(400, "Request body is required");
+  }
+
+  const email = getString(req.body.email)?.toLowerCase();
+  const code = getString(req.body.code);
+
+  if (!email || !code) {
+    throw new HttpError(400, "email and code are required");
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { userId: true },
+  });
+
+  if (!user) {
+    throw new HttpError(400, "Invalid reset code");
+  }
+
+  await validatePasswordResetCode(user.userId, code);
+
+  res.json({ ok: true, message: "Code verified" });
+}
+
 /** Send a password reset code to the authenticated user's email. */
 export async function sendChangePasswordCode(req: AuthRequest, res: Response) {
   const userId = getAuthenticatedUserId(req);
@@ -206,6 +265,24 @@ export async function sendChangePasswordCode(req: AuthRequest, res: Response) {
     expiresAt: expiresAt.toISOString(),
     ttlMinutes,
   });
+}
+
+/** Check reset code before showing the new-password form (authenticated). */
+export async function verifyChangePasswordCode(req: AuthRequest, res: Response) {
+  const userId = getAuthenticatedUserId(req);
+
+  if (!isRecord(req.body)) {
+    throw new HttpError(400, "Request body is required");
+  }
+
+  const code = getString(req.body.code);
+  if (!code) {
+    throw new HttpError(400, "code is required");
+  }
+
+  await validatePasswordResetCode(userId, code);
+
+  res.json({ ok: true, message: "Code verified" });
 }
 
 /** Confirm password change with code (authenticated). */

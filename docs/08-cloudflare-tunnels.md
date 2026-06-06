@@ -61,7 +61,7 @@ After=network.target
 
 [Service]
 User=root
-ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://localhost:4000
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:4000
 Restart=always
 RestartSec=10
 
@@ -225,7 +225,35 @@ sudo systemctl disable <tunnel-service-name>
 
 It will no longer start automatically after droplet reboots. Re-enable with `sudo systemctl enable <tunnel-service-name>`.
 
-## 7. Harmless Warnings In The Tunnel Log
+## 7. Tunnel Log: `dial tcp [::1]:4000: connection refused`
+
+If `journalctl -u tbhon-backend-tunnel` shows errors like:
+
+```text
+Unable to reach the origin service ... dial tcp [::1]:4000: connect: connection refused
+```
+
+while `curl http://127.0.0.1:4000/health` on the droplet returns `{"status":"ok"}`, the tunnel is pointing at **`localhost`**, which cloudflared resolves to IPv6 (`::1`). Node/PM2 listens on IPv4 (`127.0.0.1`) only.
+
+Fix the systemd unit to use the IPv4 loopback explicitly:
+
+```bash
+sudo sed -i 's|http://localhost:4000|http://127.0.0.1:4000|' /etc/systemd/system/tbhon-backend-tunnel.service
+sudo systemctl daemon-reload
+sudo systemctl restart tbhon-backend-tunnel
+curl -s http://127.0.0.1:4000/health
+journalctl -u tbhon-backend-tunnel -n 10 --no-pager
+```
+
+Then test through the tunnel URL from your PC:
+
+```powershell
+curl.exe -s https://<backend-tunnel-url>.trycloudflare.com/health
+```
+
+Use `127.0.0.1` (not `localhost`) in the tunnel URL for the backend. The ML tunnel can use `http://127.0.0.1:8000` the same way if you see the same error on port 8000.
+
+## 8. Harmless Warnings In The Tunnel Log
 
 You can ignore both of these:
 
@@ -236,7 +264,7 @@ WRN ICMP proxy feature is disabled error="cannot create ICMPv4 proxy: ..."
 
 The ICMP proxy is only relevant if applications behind the tunnel need to send `ping` packets out. HTTP traffic is unaffected.
 
-## 8. Upgrade Path To Permanent URLs
+## 9. Upgrade Path To Permanent URLs
 
 Quick tunnels are fine for development and demos. For a public beta or production release, switch to **named tunnels** under a Cloudflare account:
 

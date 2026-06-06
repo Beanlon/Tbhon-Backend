@@ -6,6 +6,8 @@ import {
   forgotPassword,
   resetPassword,
   sendChangePasswordCode,
+  verifyChangePasswordCode,
+  verifyForgotPasswordCode,
 } from "../controllers/passwordReset.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 
@@ -18,6 +20,8 @@ authRouter.post("/logout", logout);
 authRouter.post("/email/send-verification", requireAuth, sendEmailVerification);
 authRouter.post("/email/verify", requireAuth, verifyEmail);
 authRouter.post("/forgot-password", forgotPassword);
+authRouter.post("/forgot-password/verify-code", verifyForgotPasswordCode);
 authRouter.post("/reset-password", resetPassword);
 authRouter.post("/change-password/send-code", requireAuth, sendChangePasswordCode);
+authRouter.post("/change-password/verify-code", requireAuth, verifyChangePasswordCode);
 authRouter.post("/change-password/confirm", requireAuth, confirmChangePassword);
