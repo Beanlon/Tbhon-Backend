@@ -9,6 +9,7 @@ import {
   getMyScreening,
   listMyScreenings,
   requestIotCapture,
+  upsertScreeningClient,
 } from "../controllers/screening.controller";
 import {
   attachCoughRecordingRaw,
@@ -32,6 +33,7 @@ screeningRouter.post("/cleanup-incomplete", requireAuth, cleanupIncompleteScreen
 screeningRouter.get("/", requireAuth, listMyScreenings);
 screeningRouter.get("/export", requireAuth, requireEmailVerified, exportMyScreenings);
 screeningRouter.delete("/:sessionId", requireAuth, deleteIncompleteScreening);
+screeningRouter.put("/:sessionId/client", requireAuth, upsertScreeningClient);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 
 // --- Raw media (account-scoped, cross-device) -----------------------------

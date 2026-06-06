@@ -20,6 +20,7 @@ import {
   deleteIncompleteScreeningsForUser,
   purgeStaleIncompleteScreenings,
 } from "../services/incompleteScreeningCleanup";
+import { formatClientDisplayName, parseClientInput, serializeScreeningClient } from "../utils/client";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -186,6 +187,30 @@ export async function createDraftScreening(req: AuthRequest, res: Response) {
     },
   });
   res.status(201).json({ ok: true, sessionId });
+}
+
+/** PUT /screenings/:sessionId/client — attach screened person to an open session. */
+export async function upsertScreeningClient(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+  if (!isRecord(req.body)) throw new HttpError(400, "Request body is required");
+
+  const session = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+    include: { result: { select: { resultId: true } } },
+  });
+  if (!session) throw new HttpError(404, "Screening session not found");
+  if (session.result) throw new HttpError(409, "Screening already completed");
+
+  const data = parseClientInput(req.body.client ?? req.body);
+  const client = await prisma.screeningClient.upsert({
+    where: { sessionId },
+    create: { clientId: randomUUID(), sessionId, ...data },
+    update: data,
+  });
+
+  res.json({ ok: true, client: serializeScreeningClient(client) });
 }
 
 /** POST /screenings/iot/request-capture — queue image/audio for ESP32 (JWT, no IoT key on phone). */
@@ -541,13 +566,19 @@ export async function listMyScreenings(req: AuthRequest, res: Response) {
           createdAt: true,
         },
       },
+      client: true,
       _count: {
         select: { coughRecordings: true, symptomResponses: true },
       },
     },
   });
 
-  res.json({ screenings: rows });
+  res.json({
+    screenings: rows.map((row) => ({
+      ...row,
+      client: serializeScreeningClient(row.client),
+    })),
+  });
 }
 
 function csvEscape(value: string | number | null | undefined): string {
@@ -579,11 +610,12 @@ export async function exportMyScreenings(req: AuthRequest, res: Response) {
       finalRiskLevel: true,
       averageTbProbability: true,
       result: { select: { riskLevel: true } },
+      client: true,
     },
   });
 
   const header =
-    "session_id,completed_at_utc,risk_level,tb_probability_percent,disclaimer";
+    "session_id,completed_at_utc,client_name,risk_level,tb_probability_percent,disclaimer";
   const disclaimer =
     "Screening aid only — not a medical diagnosis. Consult a healthcare professional.";
   const lines = rows.map((row) => {
@@ -593,9 +625,11 @@ export async function exportMyScreenings(req: AuthRequest, res: Response) {
       typeof row.averageTbProbability === "number" && Number.isFinite(row.averageTbProbability)
         ? (row.averageTbProbability * 100).toFixed(1)
         : "";
+    const clientName = row.client ? formatClientDisplayName(row.client) : "";
     return [
       csvEscape(row.sessionId),
       csvEscape(completed),
+      csvEscape(clientName),
       csvEscape(risk),
       csvEscape(prob),
       csvEscape(disclaimer),
@@ -617,6 +651,7 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
     where: { sessionId, userId },
     include: {
       result: true,
+      client: true,
       symptomResponses: {
         include: { question: { select: { questionId: true, category: true, questionText: true } } },
       },
@@ -676,6 +711,7 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
   res.json({
     session: {
       ...session,
+      client: serializeScreeningClient(session.client),
       coughRecordings,
       sputumImage,
     },
