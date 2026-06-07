@@ -1,18 +1,12 @@
 import type { Request, Response } from "express";
 import bcrypt from "bcryptjs";
 import { prisma } from "../prisma";
-import { sendPasswordResetOtp } from "../services/email.service";
+import { issuePasswordResetCode } from "../services/passwordReset.service";
 import { revokeAllRefreshTokensForUser } from "../services/refreshToken.service";
 import type { AuthRequest } from "../types/auth";
 import {
-  canResendVerification,
-  generateVerificationCode,
-  hashVerificationCode,
   isVerificationExpired,
   maxVerifyAttempts,
-  resendCooldownSecondsRemaining,
-  verificationExpiresAt,
-  verificationTtlMinutes,
   verifyVerificationCode,
 } from "../utils/emailVerification";
 import { HttpError, getString, isRecord } from "../utils/http";
@@ -27,43 +21,6 @@ function getAuthenticatedUserId(req: AuthRequest): string {
     throw new HttpError(401, "Authorization token is required");
   }
   return userId;
-}
-
-async function issuePasswordResetCode(userId: string, email: string) {
-  const existing = await prisma.user.findUnique({
-    where: { userId },
-    select: { passwordResetSentAt: true },
-  });
-
-  if (!canResendVerification(existing?.passwordResetSentAt ?? null)) {
-    const seconds = resendCooldownSecondsRemaining(existing?.passwordResetSentAt ?? null);
-    throw new HttpError(429, `Please wait ${seconds} seconds before requesting another code.`);
-  }
-
-  const code = generateVerificationCode();
-  const codeHash = await hashVerificationCode(code);
-  const expiresAt = verificationExpiresAt();
-  const now = new Date();
-
-  await prisma.user.update({
-    where: { userId },
-    data: {
-      passwordResetCodeHash: codeHash,
-      passwordResetExpiresAt: expiresAt,
-      passwordResetSentAt: now,
-      passwordResetAttemptCount: 0,
-    },
-  });
-
-  console.log("[auth] Issuing password reset OTP:", { userId, to: email });
-
-  await sendPasswordResetOtp({
-    to: email,
-    code,
-    ttlMinutes: verificationTtlMinutes(),
-  });
-
-  return { expiresAt, ttlMinutes: verificationTtlMinutes() };
 }
 
 async function validatePasswordResetCode(userId: string, code: string): Promise<void> {

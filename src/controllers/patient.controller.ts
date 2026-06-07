@@ -10,6 +10,7 @@ import {
   profileInputFromScreeningClient,
   profilePrefillFromScreeningClient,
 } from "../utils/patientAccess";
+import { maskEmail } from "../utils/emailMask";
 import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
 import { toUserResponse, userInclude } from "../utils/userResponse";
@@ -56,10 +57,19 @@ export async function getPatientClaimStatus(req: Request, res: Response) {
   }
 
   if (session.patientUserId) {
+    const patient = await prisma.user.findUnique({
+      where: { userId: session.patientUserId },
+      select: { email: true },
+    });
+    const maskedEmail = maskEmail(patient?.email);
+    const message = maskedEmail
+      ? `This result slip is already linked to ${maskedEmail}. Sign in with that email, or use Forgot password if you need a new password.`
+      : "This result slip is already linked to an account. Sign in with the email and password you chose when you set it up.";
+
     res.json({
       status: "claimed",
-      message:
-        "This result slip is already linked to an account. Sign in with the email and password you chose when you set it up.",
+      maskedEmail,
+      message,
     });
     return;
   }

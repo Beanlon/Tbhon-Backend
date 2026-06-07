@@ -14,6 +14,10 @@ import {
   upsertScreeningClient,
 } from "../controllers/screening.controller";
 import {
+  getPatientRecoveryForSession,
+  sendPatientRecoveryPasswordReset,
+} from "../controllers/patientRecovery.controller";
+import {
   attachCoughRecordingRaw,
   attachSputumImageRaw,
   downloadCoughRecording,
@@ -41,6 +45,12 @@ screeningRouter.delete("/:sessionId", ...staffScreening, deleteIncompleteScreeni
 screeningRouter.put("/:sessionId/client", ...staffScreening, upsertScreeningClient);
 screeningRouter.patch("/:sessionId/referral", ...staffScreening, updateScreeningReferral);
 screeningRouter.get("/:sessionId/patient-access", ...staffScreening, getPatientAccessForSession);
+screeningRouter.get("/:sessionId/patient-recovery", ...staffScreening, getPatientRecoveryForSession);
+screeningRouter.post(
+  "/:sessionId/patient-recovery/send-reset",
+  ...staffScreening,
+  sendPatientRecoveryPasswordReset,
+);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 
 // --- Raw media (account-scoped, cross-device) -----------------------------
