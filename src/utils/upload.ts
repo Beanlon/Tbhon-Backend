@@ -1,4 +1,6 @@
+import type { RequestHandler } from "express";
 import multer from "multer";
+import { HttpError } from "./http";
 
 /**
  * In-memory uploads keep the raw file bytes in `req.file.buffer`, which we can
@@ -11,6 +13,49 @@ export const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_BYTES, files: 1 },
 });
+
+/** True when the client (ESP32 / phone) closed the TCP socket mid-upload. */
+export function isUploadClientDisconnect(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: string; message?: string; storageErrors?: unknown[] };
+  if (e.code === "ECONNRESET" || e.code === "EPIPE" || e.code === "ERR_STREAM_PREMATURE_CLOSE") {
+    return true;
+  }
+  const msg = typeof e.message === "string" ? e.message : "";
+  if (/aborted|socket hang up|premature close/i.test(msg)) return true;
+  // Multer/busboy stream errors when the device drops the connection early.
+  if (Array.isArray(e.storageErrors)) return true;
+  return false;
+}
+
+/** Multer middleware that maps client disconnects to 408 instead of crashing the log. */
+export function uploadSingle(fieldName: string): RequestHandler {
+  const handler = upload.single(fieldName);
+  return (req, res, next) => {
+    handler(req, res, (err) => {
+      if (!err) {
+        next();
+        return;
+      }
+      if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          next(new HttpError(413, `File exceeds ${MAX_BYTES} byte limit`));
+          return;
+        }
+        next(new HttpError(400, err.message));
+        return;
+      }
+      if (isUploadClientDisconnect(err)) {
+        console.warn("[upload] Client disconnected before upload finished");
+        if (!res.headersSent) {
+          res.status(408).json({ message: "Upload interrupted" });
+        }
+        return;
+      }
+      next(err);
+    });
+  };
+}
 
 /** Map a filename / declared mime to a safe storage mime + extension. */
 export function normalizeAudioMime(mime: string | undefined, filename: string | undefined): {

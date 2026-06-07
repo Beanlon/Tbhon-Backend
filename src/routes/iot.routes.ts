@@ -15,7 +15,7 @@ import {
   iotUploadSputum,
 } from "../controllers/iot.controller";
 import { requireIotKey } from "../middleware/iot.middleware";
-import { upload } from "../utils/upload";
+import { uploadSingle } from "../utils/upload";
 
 export const iotRouter = Router();
 
@@ -46,13 +46,13 @@ iotRouter.get("/device-status", requireIotKey, iotGetDeviceStatus);
 iotRouter.post(
   "/cough-recordings",
   requireIotKey,
-  upload.single("file"),
+  uploadSingle("file"),
   iotUploadCough,
 );
 iotRouter.post(
   "/sputum-images",
   requireIotKey,
-  upload.single("file"),
+  uploadSingle("file"),
   iotUploadSputum,
 );
 iotRouter.get(

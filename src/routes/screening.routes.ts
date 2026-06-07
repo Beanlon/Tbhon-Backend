@@ -23,7 +23,7 @@ import {
 import { requireAuth } from "../middleware/auth.middleware";
 import { requireEmailVerified } from "../middleware/requireEmailVerified.middleware";
 import { requireStaff } from "../middleware/requireStaff.middleware";
-import { upload } from "../utils/upload";
+import { uploadSingle } from "../utils/upload";
 
 export const screeningRouter = Router();
 
@@ -45,26 +45,26 @@ screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 screeningRouter.post(
   "/:sessionId/cough-recordings/:recordingId/raw",
   ...staffScreening,
-  upload.single("file"),
+  uploadSingle("file"),
   attachCoughRecordingRaw,
 );
 screeningRouter.post(
   "/:sessionId/sputum-image/raw",
   ...staffScreening,
-  upload.single("file"),
+  uploadSingle("file"),
   attachSputumImageRaw,
 );
 
 screeningRouter.post(
   "/:sessionId/cough-recordings",
   ...staffScreening,
-  upload.single("file"),
+  uploadSingle("file"),
   uploadCoughRecording,
 );
 screeningRouter.post(
   "/:sessionId/sputum-image",
   ...staffScreening,
-  upload.single("file"),
+  uploadSingle("file"),
   uploadSputumImage,
 );
 
