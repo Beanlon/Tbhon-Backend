@@ -28,6 +28,7 @@ import {
   isPatientAccessExpired,
   patientAccessExpiresAt,
 } from "../utils/patientAccess";
+import { maskEmail } from "../utils/emailMask";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -717,16 +718,16 @@ export async function getPatientAccessForSession(req: AuthRequest, res: Response
       patientAccessToken: true,
       patientAccessExpiresAt: true,
       patientUserId: true,
+      patientUser: { select: { email: true } },
       result: { select: { resultId: true } },
     },
   });
 
   if (!session?.result) throw new HttpError(404, "Screening session not found");
   if (!session.patientAccessToken) throw new HttpError(404, "Patient access code not available");
-  if (session.patientUserId) {
-    throw new HttpError(409, "This result has already been linked to a patient account");
-  }
-  if (isPatientAccessExpired(session.patientAccessExpiresAt)) {
+
+  const alreadyClaimed = Boolean(session.patientUserId);
+  if (!alreadyClaimed && isPatientAccessExpired(session.patientAccessExpiresAt)) {
     throw new HttpError(410, "Patient access code has expired");
   }
 
@@ -735,6 +736,8 @@ export async function getPatientAccessForSession(req: AuthRequest, res: Response
     token: session.patientAccessToken,
     claimUrl: buildPatientClaimUrl(session.patientAccessToken),
     expiresAt: session.patientAccessExpiresAt?.toISOString() ?? null,
+    alreadyClaimed,
+    maskedEmail: alreadyClaimed ? maskEmail(session.patientUser?.email) : null,
   });
 }
 
