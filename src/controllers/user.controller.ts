@@ -1,5 +1,6 @@
 import type { Response } from "express";
 import { prisma } from "../prisma";
+import { syncPatientProfileFromLinkedScreening } from "../services/patientProfile.service";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
@@ -17,6 +18,10 @@ function getAuthenticatedUserId(req: AuthRequest) {
 
 export async function getMe(req: AuthRequest, res: Response) {
   const userId = getAuthenticatedUserId(req);
+
+  if (req.user?.role === "PATIENT") {
+    await syncPatientProfileFromLinkedScreening(userId);
+  }
 
   const user = await prisma.user.findUnique({
     where: { userId },
