@@ -61,6 +61,7 @@ model User {
   profile           UserProfile?
   facility          Facility?          @relation(fields: [facilityId], references: [facilityId], onDelete: SetNull)
   screeningSessions ScreeningSession[]
+  claimedScreenings ScreeningSession[] @relation("PatientClaimedSessions")
   authRefreshTokens AuthRefreshToken[]
 
   @@index([facilityId])
@@ -116,8 +117,15 @@ model ScreeningSession {
   staffNotes           String?   @map("staff_notes") @db.Text
   /** When staff confirmed before releasing the result screen. */
   staffResultConfirmedAt DateTime? @map("staff_result_confirmed_at")
+  /** One-time QR token for screened person to claim their result in the app. */
+  patientAccessToken     String?   @unique @map("patient_access_token") @db.VarChar(64)
+  patientAccessExpiresAt DateTime? @map("patient_access_expires_at")
+  /** PATIENT user who claimed this session via result-slip QR. */
+  patientUserId          String?   @map("patient_user_id") @db.VarChar(191)
+  patientClaimedAt       DateTime? @map("patient_claimed_at")
 
   user             User              @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  patientUser      User?             @relation("PatientClaimedSessions", fields: [patientUserId], references: [userId], onDelete: SetNull)
   symptomResponses SymptomResponse[]
   coughRecordings  CoughRecording[]
   sputumImage      SputumImage?
@@ -125,6 +133,7 @@ model ScreeningSession {
   client           ScreeningClient?
 
   @@index([userId])
+  @@index([patientUserId])
   @@map("screening_sessions")
 }
 

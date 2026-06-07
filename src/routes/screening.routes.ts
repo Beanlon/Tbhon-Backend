@@ -7,6 +7,7 @@ import {
   exportMyScreenings,
   getIotDeviceStatus,
   getMyScreening,
+  getPatientAccessForSession,
   listMyScreenings,
   requestIotCapture,
   updateScreeningReferral,
@@ -39,6 +40,7 @@ screeningRouter.get("/export", requireAuth, requireEmailVerified, exportMyScreen
 screeningRouter.delete("/:sessionId", ...staffScreening, deleteIncompleteScreening);
 screeningRouter.put("/:sessionId/client", ...staffScreening, upsertScreeningClient);
 screeningRouter.patch("/:sessionId/referral", ...staffScreening, updateScreeningReferral);
+screeningRouter.get("/:sessionId/patient-access", ...staffScreening, getPatientAccessForSession);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 
 // --- Raw media (account-scoped, cross-device) -----------------------------

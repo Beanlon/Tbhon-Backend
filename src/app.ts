@@ -6,6 +6,7 @@ import { userRouter } from "./routes/user.routes";
 import { adminRouter } from "./routes/admin.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { screeningRouter } from "./routes/screening.routes";
+import { patientRouter } from "./routes/patient.routes";
 import { iotRouter } from "./routes/iot.routes";
 import { openApiSpec } from "./openapi";
 
@@ -63,6 +64,7 @@ app.use("/auth", authRouter);
 app.use("/users", userRouter);
 app.use("/admin", adminRouter);
 app.use("/screenings", screeningRouter);
+app.use("/patient", patientRouter);
 app.use("/iot", iotRouter);
 
 app.use(errorHandler);

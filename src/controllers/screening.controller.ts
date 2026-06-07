@@ -22,6 +22,12 @@ import {
 } from "../services/incompleteScreeningCleanup";
 import { formatClientDisplayName, parseClientInput, serializeScreeningClient } from "../utils/client";
 import { referralStatusForRisk, parseReferralStatus } from "../constants/referralStatus";
+import {
+  buildPatientClaimUrl,
+  generatePatientAccessToken,
+  isPatientAccessExpired,
+  patientAccessExpiresAt,
+} from "../utils/patientAccess";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -36,6 +42,20 @@ function authenticatedUserId(req: AuthRequest): string {
   const userId = req.user?.userId;
   if (!userId) throw new HttpError(401, "Authentication is required");
   return userId;
+}
+
+function completedScreeningWhere(req: AuthRequest, userId: string) {
+  if (req.user?.role === "PATIENT") {
+    return { patientUserId: userId, completedAt: { not: null as Date | null } };
+  }
+  return { userId, completedAt: { not: null as Date | null } };
+}
+
+function screeningDetailWhere(req: AuthRequest, userId: string, sessionId: string) {
+  if (req.user?.role === "PATIENT") {
+    return { sessionId, patientUserId: userId };
+  }
+  return { sessionId, userId };
 }
 
 function parseJsonArrayOfStrings(raw: unknown): string[] {
@@ -498,6 +518,15 @@ export async function completeScreening(req: AuthRequest, res: Response) {
         referralUpdatedAt: referralStatusForRisk(riskLevel) !== "none" ? new Date() : null,
       },
     });
+
+    const patientAccessToken = generatePatientAccessToken();
+    await tx.screeningSession.update({
+      where: { sessionId },
+      data: {
+        patientAccessToken,
+        patientAccessExpiresAt: patientAccessExpiresAt(),
+      },
+    });
   });
 
   const session = await prisma.screeningSession.findUnique({
@@ -528,7 +557,16 @@ export async function completeScreening(req: AuthRequest, res: Response) {
 
   // Mobile clients use the returned recordingIds / imageId to attach the
   // actual raw bytes via `/screenings/:sessionId/(cough-recordings/:id|sputum-image)/raw`.
-  res.status(201).json({ session });
+  const patientAccess =
+    session?.patientAccessToken && !isPatientAccessExpired(session.patientAccessExpiresAt)
+      ? {
+          token: session.patientAccessToken,
+          claimUrl: buildPatientClaimUrl(session.patientAccessToken),
+          expiresAt: session.patientAccessExpiresAt?.toISOString() ?? null,
+        }
+      : null;
+
+  res.status(201).json({ session, patientAccess });
 }
 
 /** DELETE /screenings/:sessionId — remove an incomplete session (no results / risk yet). */
@@ -570,7 +608,7 @@ export async function listMyScreenings(req: AuthRequest, res: Response) {
   const limit = Math.min(100, Math.max(1, Number(limitRaw ?? "50") || 50));
 
   const rows = await prisma.screeningSession.findMany({
-    where: { userId, completedAt: { not: null } },
+    where: completedScreeningWhere(req, userId),
     orderBy: { completedAt: "desc" },
     take: limit,
     select: {
@@ -625,7 +663,7 @@ export async function exportMyScreenings(req: AuthRequest, res: Response) {
   const limit = 500;
 
   const rows = await prisma.screeningSession.findMany({
-    where: { userId, completedAt: { not: null } },
+    where: completedScreeningWhere(req, userId),
     orderBy: { completedAt: "desc" },
     take: limit,
     select: {
@@ -666,13 +704,47 @@ export async function exportMyScreenings(req: AuthRequest, res: Response) {
   res.send(csv);
 }
 
-export async function getMyScreening(req: AuthRequest, res: Response) {
+/** GET /screenings/:sessionId/patient-access — staff retrieves QR payload for result slip / PDF. */
+export async function getPatientAccessForSession(req: AuthRequest, res: Response) {
   const userId = authenticatedUserId(req);
   const sessionId = getString(req.params.sessionId);
   if (!sessionId) throw new HttpError(400, "sessionId is required");
 
   const session = await prisma.screeningSession.findFirst({
     where: { sessionId, userId },
+    select: {
+      sessionId: true,
+      patientAccessToken: true,
+      patientAccessExpiresAt: true,
+      patientUserId: true,
+      result: { select: { resultId: true } },
+    },
+  });
+
+  if (!session?.result) throw new HttpError(404, "Screening session not found");
+  if (!session.patientAccessToken) throw new HttpError(404, "Patient access code not available");
+  if (session.patientUserId) {
+    throw new HttpError(409, "This result has already been linked to a patient account");
+  }
+  if (isPatientAccessExpired(session.patientAccessExpiresAt)) {
+    throw new HttpError(410, "Patient access code has expired");
+  }
+
+  res.json({
+    sessionId: session.sessionId,
+    token: session.patientAccessToken,
+    claimUrl: buildPatientClaimUrl(session.patientAccessToken),
+    expiresAt: session.patientAccessExpiresAt?.toISOString() ?? null,
+  });
+}
+
+export async function getMyScreening(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+
+  const session = await prisma.screeningSession.findFirst({
+    where: screeningDetailWhere(req, userId, sessionId),
     include: {
       result: true,
       client: true,
