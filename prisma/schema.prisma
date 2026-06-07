@@ -6,11 +6,26 @@ datasource db {
   provider = "mysql"
 }
 
+enum UserRole {
+  STAFF
+  ADMIN
+  PATIENT
+}
+
+enum ReferralStatus {
+  none
+  recommended
+  documented
+  completed
+}
+
 model User {
   userId       String   @id @default(uuid()) @map("user_id") @db.VarChar(191)
   email        String?  @unique @db.VarChar(255)
   phoneNumber  String?  @map("phone_number") @db.VarChar(30)
   passwordHash String   @map("password_hash") @db.VarChar(255)
+  /** STAFF/ADMIN = booth operator; PATIENT reserved for future patient portal. */
+  role         UserRole @default(STAFF)
   emailVerified                   Boolean   @default(false) @map("email_verified")
   emailVerifiedAt                 DateTime? @map("email_verified_at")
   emailVerificationCodeHash       String?   @map("email_verification_code_hash") @db.VarChar(255)
@@ -74,6 +89,12 @@ model ScreeningSession {
   apiAttempt           String?   @map("api_attempt") @db.Text
   /** Raw checklist JSON from the client ({ version, items:[{id,label,value}] }) — survives even when FK symptom rows are skipped */
   checklistPayload     Json?     @map("checklist_payload")
+  /** Staff-documented reason when sputum smear was skipped (audit trail). */
+  sputumSkipReason     String?   @map("sputum_skip_reason") @db.VarChar(255)
+  /** Optional booth staff notes for this session. */
+  staffNotes           String?   @map("staff_notes") @db.Text
+  /** When staff confirmed before releasing the result screen. */
+  staffResultConfirmedAt DateTime? @map("staff_result_confirmed_at")
 
   user             User              @relation(fields: [userId], references: [userId], onDelete: Cascade)
   symptomResponses SymptomResponse[]
@@ -235,6 +256,10 @@ model ScreeningResult {
   invalidAudio            Boolean  @default(false) @map("invalid_audio")
   invalidAudioLabel       String?  @map("invalid_audio_label") @db.VarChar(100)
   invalidAudioReasonsJson Json?    @map("invalid_audio_reasons_json")
+  /** GeneXpert / clinical workup follow-up tracking. */
+  referralStatus          ReferralStatus @default(none) @map("referral_status")
+  referralNotes           String?        @map("referral_notes") @db.Text
+  referralUpdatedAt       DateTime?      @map("referral_updated_at")
   createdAt               DateTime @default(now()) @map("created_at")
 
   session ScreeningSession @relation(fields: [sessionId], references: [sessionId], onDelete: Cascade)

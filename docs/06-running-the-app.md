@@ -30,7 +30,24 @@ Earlier setups used plain HTTP IPs such as `http://<droplet-ip>:4000`. That work
 
 ### How To Find The Current Tunnel URLs
 
-Quick tunnels generate a new random URL whenever `cloudflared` restarts (including droplet reboots). To grab the current URLs:
+Quick tunnels generate a new random URL whenever `cloudflared` restarts (including droplet reboots).
+
+**Automatic (recommended)** — from repo root on your PC:
+
+```bash
+npm run tunnel:sync
+```
+
+SSH reads `journalctl` on both droplets and merges fresh `EXPO_PUBLIC_*` lines into `mobile/.env` (keeps `EXPO_PUBLIC_IOT_API_KEY` and other keys). Then restart Expo: `cd mobile && npx expo start -c`.
+
+Alternatives:
+
+| Command | When to use |
+| --- | --- |
+| `npm run tunnel:droplets` | No SSH; starts local cloudflared proxies to droplet IPs and writes `.env` |
+| `npm run tunnel:refresh` | Tunnels already running locally; re-read `infra/cloudflare/tunnel-*.err.log` |
+
+**Manual fallback:**
 
 ```bash
 ssh root@<backend-droplet-ip> "journalctl -u tbhon-backend-tunnel -n 30 --no-pager | grep trycloudflare"

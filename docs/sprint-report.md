@@ -93,7 +93,7 @@ Persists data, runs screening business logic, and executes ML inference.
 | Feature | Status | Evidence |
 | --- | --- | --- |
 | CRUD operations (users, sessions, media, predictions) | Done | Schema: `Tbhon-Backend/prisma/schema.prisma` (10 models). Routes: `src/routes/auth.routes.ts`, `user.routes.ts`, `screening.routes.ts` |
-| Screening session business logic | In Progress | `src/controllers/screening.controller.ts` — draft/complete/list/get. Slot logic: `src/utils/coughAttempt.ts`. **Core flow works; full E2E sign-off pending details playback fix** |
+| Screening session business logic | Done | `src/controllers/screening.controller.ts` — draft/complete/list/get. Slot logic: `src/utils/coughAttempt.ts`. IoT completion links ML predictions to existing cough rows. **Full E2E sign-off ready for manual re-test** |
 | Raw media persistence | Done | `src/controllers/screening.media.controller.ts` — `attachCoughRecordingRaw`, `attachSputumImageRaw`, `downloadCoughRecording`, `downloadSputumImage`. DB: `cough_recordings.raw_data`, `sputum_images.raw_data` in `schema.prisma`. Store and download verified |
 | ML inference engine — cough | Done | `Tbhon/ml/infer_api.py` — `POST /check-quality`, `POST /predict`. Training: `ml/train_tb_cough_cnn.py`. **API responds in isolation** (`ml/smoke_test_infer.py`, `/healthz`) |
 | ML inference engine — sputum | Done | `Tbhon/ml/infer_api.py` — `POST /predict-phlegm`. Training: `Tbhon/ml (phlegm)/train_phlegm_cnn.py`. **E2E verified via processing screen** |
@@ -110,7 +110,7 @@ Presents screening outcomes, history, and educational content to the user.
 | --- | --- | --- |
 | Screening results view | Done | `mobile/app/screening/result.tsx` — `RISK_CONFIG` (low / moderate / high), TB probability, phlegm load grade, confidence, guidance text. Backend: `screening_results` table |
 | Detailed session report | Done | `mobile/app/screening/details.tsx` — cough breakdown, `CoughQualityBadge.tsx`, `SputumSamplePhoto.tsx`, checklist recap, sputum image display |
-| Cough audio playback (session details) | In Progress | `mobile/app/screening/details.tsx` — `playAudioAt()` via Expo AV (`Audio.Sound.loadAsync`). **Open bug: playback fails in details view; raw media storage/download is Done** |
+| Cough audio playback (session details) | Done | `mobile/app/screening/details.tsx` — downloads server bytes via `downloadSessionCoughToCache()` then plays local file with Expo AV (same pattern as `iot-cough.tsx`) |
 | Screening history | Done | `mobile/app/history/HistoryScreen.tsx` → `GET /screenings` via `backendApi.ts`. Cache: `mobile/utils/screeningHistoryCache.ts` |
 | Home dashboard visualization | Done | `mobile/app/home/HomeScreen.tsx`, `QuickResultPreviewCard.tsx`, `GaugeChart.tsx` |
 | TB education content | Done | `mobile/app/learn/LearnContent.tsx` |
@@ -221,12 +221,12 @@ Email verify UI     →                               →                       
 
 | Issue | Severity | Planned Fix |
 | --- | --- | --- |
-| Cough audio playback fails in session details view (`details.tsx` `playAudioAt`) despite raw media storing correctly | **High** | Fix Expo AV playback URI/headers for server-downloaded cough clips; verify replay from `GET .../cough-recordings/.../file` |
+| Cough audio playback fails in session details view (`details.tsx` `playAudioAt`) despite raw media storing correctly | **Resolved** | Fixed: download authenticated cough bytes to cache before playback (`downloadSessionCoughToCache`) |
 | IoT BLE Wi‑Fi provisioning cannot be used in Expo Go; requires native build for Bluetooth scan and credential write from the **app** | **High** | Produce **EAS / development build**; exercise `scanAndConnectEsp32Setup()` from app; optionally update **ESP32 firmware** to accept BLE-provisioned Wi‑Fi instead of hardcoded credentials |
 | IoT device setup incomplete in current environment — cannot fully exercise Bluetooth + in-app Wi‑Fi setup | **Medium** | Native deployment + OS Bluetooth permissions; tester setup guide |
-| Screening session completion not verified E2E end-to-end | **Medium** | Re-test full draft → complete flow after details playback fix |
-| Cloudflare quick tunnel URLs rotate on restart; mobile `.env` must be updated manually | **Medium** | Named Cloudflare tunnels with stable hostnames (`docs/08-cloudflare-tunnels.md`) |
-| Cough ML model ~51% macro F1 — integration only, not clinically validated | **Medium** | Retrain/evaluate; document limits (not same-sprint blocker) |
+| Screening session completion not verified E2E end-to-end | **Medium** | Re-test full draft → complete → history → details (playback, patient info, PDF) on device |
+| Cloudflare quick tunnel URLs rotate on restart; mobile `.env` must be updated manually | **Resolved** | `npm run tunnel:sync` (SSH droplet URLs → `mobile/.env`); `tunnel:droplets` / `tunnel:refresh` auto-merge; named tunnels for prod (`docs/08-cloudflare-tunnels.md`) |
+| Cough ML model ~51% macro F1 — integration only, not clinically validated | **Resolved (deploy)** | Production hybrid **~0.69** test macro-F1 pinned in `ml/production_model.json`; deploy via `npm run ml:deploy-cough`. Still not clinically validated for standalone diagnosis. |
 | JWT client-persisted only; no refresh-token rotation or session revocation | **Low** | **Next sprint:** 2FA, password change, email verification, token hardening |
 | No automated E2E or unit test suite for screening flow | **Low** | Add smoke/E2E tests after remaining bugs stabilized |
 | Dual capture paths (phone mic vs IoT) increase test surface; IoT primary from home | **Low** | Document test matrix; narrow fallbacks once IoT provisioning stable |
@@ -236,10 +236,10 @@ Email verify UI     →                               →                       
 ## Known Issues & Technical Debt (reference)
 
 - **IoT device setup (deployment dependency):** App has checklist UI, `GET /iot/health`, and `bleWifiProvisioning.ts` (BLE Wi‑Fi write). Full app-side provisioning needs a **native build** (EAS/dev client)—Expo Go lacks Bluetooth access. **Bench workaround:** **ESP32 firmware** is programmed with **hardcoded Wi‑Fi**; the mobile app does not store or hardcode SSID/password.
-- **Open bugs (in progress):** **Cough audio playback in session details view** (`details.tsx`) — playback fails; **raw media persistence and sputum capture are Done**.
-- **Tunnel URL rotation:** Cloudflare quick tunnel URLs change on restart; mobile `.env` must be updated manually until named tunnels are configured.
+- **Open bugs (in progress):** None blocking core screening E2E. **IoT BLE Wi‑Fi provisioning** still requires native build.
+- **Tunnel URL rotation:** Quick tunnel hostnames still change when `cloudflared` restarts, but `mobile/.env` is updated automatically via `npm run tunnel:sync`, `tunnel:droplets`, or `tunnel:refresh` (preserves `EXPO_PUBLIC_IOT_API_KEY`). Named tunnels remain recommended for production.
 - **Auth hardening:** No 2FA, email verification, or authenticated password change yet — planned for next sprint (Module 1 + 2 + 4).
-- **ML accuracy:** Cough model performance (~51% macro F1) is adequate for pipeline testing but not for standalone clinical use.
+- **ML accuracy:** Cough hybrid checkpoint reaches **~0.69 test macro-F1** (integration testing). Not validated for standalone clinical use. Confirm live model: `GET /healthz` on ML droplet.
 - **Dual capture paths:** Phone and IoT flows coexist; IoT is the primary path from home; phone recording remains as fallback in review routing.
 - **iOS/cellular networking:** Resolved via HTTPS tunnels; LAN-only ML URLs fail on carrier data (by design, documented).
 
@@ -259,7 +259,7 @@ Email verify UI     →                               →                       
 | Raw media persistence | Upload attach + download endpoints | **Done** — `raw_data` stored and retrievable |
 | Screening results view | Result screen after processing | **Done** |
 | Detailed session report | Details layout and data display | **Done** |
-| Cough audio playback (session details) | Tap-to-play in `details.tsx` | **In progress — open playback bug** |
+| Cough audio playback (session details) | Tap-to-play in `details.tsx` from history | **Done** — authenticated download + local playback |
 | Sputum capture E2E | Manual device testing | **Done** — IoT poll, upload, review → processing verified |
 | IoT sputum uploads | Device key + debug endpoint | **Done** — `POST /iot/sputum-images` linked to session |
 

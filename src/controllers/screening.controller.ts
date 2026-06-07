@@ -21,6 +21,7 @@ import {
   purgeStaleIncompleteScreenings,
 } from "../services/incompleteScreeningCleanup";
 import { formatClientDisplayName, parseClientInput, serializeScreeningClient } from "../utils/client";
+import { referralStatusForRisk, parseReferralStatus } from "../constants/referralStatus";
 
 const RISK_FALLBACK_REC = {
   low:
@@ -201,7 +202,7 @@ export async function upsertScreeningClient(req: AuthRequest, res: Response) {
     include: { result: { select: { resultId: true } } },
   });
   if (!session) throw new HttpError(404, "Screening session not found");
-  if (session.result) throw new HttpError(409, "Screening already completed");
+  // Client may be attached after completion (walk-in booths).
 
   const data = parseClientInput(req.body.client ?? req.body);
   const client = await prisma.screeningClient.upsert({
@@ -290,6 +291,10 @@ export async function completeScreening(req: AuthRequest, res: Response) {
   const phlegmConfidence = getOptionalNumber(req.body.phlegmConfidence);
   const phlegmProbs = parsePhlegmProbs(req.body.phlegmProbs);
 
+  const sputumSkipReason = getString(req.body.sputumSkipReason);
+  const staffNotes = getString(req.body.staffNotes);
+  const staffResultConfirmed = getBool(req.body.staffResultConfirmed);
+
   const draftSessionId = getString(req.body.sessionId);
   let sessionId: string;
   let completingDraft = false;
@@ -331,6 +336,9 @@ export async function completeScreening(req: AuthRequest, res: Response) {
           uploadError,
           apiAttempt: apiAttemptRaw ?? "mobile-draft",
           ...(checklistPayload !== undefined ? { checklistPayload } : {}),
+          ...(sputumSkipReason ? { sputumSkipReason } : {}),
+          ...(staffNotes ? { staffNotes } : {}),
+          ...(staffResultConfirmed ? { staffResultConfirmedAt: new Date() } : {}),
         },
       });
       await tx.symptomResponse.deleteMany({ where: { sessionId } });
@@ -353,6 +361,9 @@ export async function completeScreening(req: AuthRequest, res: Response) {
           uploadError,
           apiAttempt: apiAttemptRaw ?? null,
           ...(checklistPayload !== undefined ? { checklistPayload } : {}),
+          ...(sputumSkipReason ? { sputumSkipReason } : {}),
+          ...(staffNotes ? { staffNotes } : {}),
+          ...(staffResultConfirmed ? { staffResultConfirmedAt: new Date() } : {}),
           symptomResponses: { create: symptomCreates },
         },
       });
@@ -379,7 +390,15 @@ export async function completeScreening(req: AuthRequest, res: Response) {
       recordingIds.push(recordingId);
     }
 
-    const firstRecordingId = recordingIds[0];
+    const firstRecordingId =
+      recordingIds[0] ??
+      (
+        await tx.coughRecording.findFirst({
+          where: { sessionId },
+          orderBy: [{ coughAttempt: "asc" }, { recordedAt: "asc" }],
+          select: { recordingId: true },
+        })
+      )?.recordingId;
     if (firstRecordingId) {
       if (invalidAudio) {
         await tx.coughQualityCheck.create({
@@ -475,6 +494,8 @@ export async function completeScreening(req: AuthRequest, res: Response) {
         invalidAudio,
         invalidAudioLabel: invalidLabel ?? null,
         ...(invalidReasons !== undefined ? { invalidAudioReasonsJson: invalidReasons } : {}),
+        referralStatus: referralStatusForRisk(riskLevel),
+        referralUpdatedAt: referralStatusForRisk(riskLevel) !== "none" ? new Date() : null,
       },
     });
   });
@@ -564,6 +585,9 @@ export async function listMyScreenings(req: AuthRequest, res: Response) {
           riskLevel: true,
           invalidAudio: true,
           createdAt: true,
+          referralStatus: true,
+          referralNotes: true,
+          referralUpdatedAt: true,
         },
       },
       client: true,
@@ -716,4 +740,35 @@ export async function getMyScreening(req: AuthRequest, res: Response) {
       sputumImage,
     },
   });
+}
+
+/** PATCH /screenings/:sessionId/referral — staff documents GeneXpert / clinical follow-up. */
+export async function updateScreeningReferral(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+  if (!isRecord(req.body)) throw new HttpError(400, "Request body is required");
+
+  const nextStatus = parseReferralStatus(req.body.referralStatus);
+  const referralNotes = getString(req.body.referralNotes);
+
+  const session = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+    include: { result: true },
+  });
+  if (!session) throw new HttpError(404, "Screening not found");
+  if (!session.result) throw new HttpError(409, "Screening has no result yet");
+
+  const referralStatus = nextStatus ?? session.result.referralStatus;
+
+  const updated = await prisma.screeningResult.update({
+    where: { sessionId },
+    data: {
+      referralStatus,
+      ...(referralNotes !== undefined ? { referralNotes: referralNotes || null } : {}),
+      referralUpdatedAt: new Date(),
+    },
+  });
+
+  res.json({ ok: true, referral: updated });
 }

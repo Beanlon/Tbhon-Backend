@@ -10,6 +10,7 @@ import {
 import { signAccessToken } from "../utils/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
+import { parseUserRole, type UserRole } from "../constants/userRole";
 
 function toUserResponse(user: {
   userId: string;
@@ -17,6 +18,7 @@ function toUserResponse(user: {
   phoneNumber: string | null;
   emailVerified: boolean;
   emailVerifiedAt: Date | null;
+  role?: UserRole | string | null;
   createdAt: Date;
   updatedAt: Date;
   profile?: unknown;
@@ -27,6 +29,7 @@ function toUserResponse(user: {
     phoneNumber: user.phoneNumber,
     emailVerified: user.emailVerified,
     emailVerifiedAt: user.emailVerifiedAt,
+    role: parseUserRole(user.role),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     profile: user.profile ?? null,
@@ -34,7 +37,12 @@ function toUserResponse(user: {
 }
 
 async function issueAuthSession(userId: string) {
-  const accessToken = signAccessToken({ userId });
+  const user = await prisma.user.findUnique({
+    where: { userId },
+    select: { role: true },
+  });
+  const role = parseUserRole(user?.role);
+  const accessToken = signAccessToken({ userId, role });
   const refreshToken = await createRefreshToken(userId);
   return { accessToken, refreshToken, token: accessToken };
 }
@@ -151,7 +159,12 @@ export async function refreshSession(req: Request, res: Response) {
 
   try {
     const rotated = await rotateRefreshToken(refreshToken);
-    const accessToken = signAccessToken({ userId: rotated.userId });
+    const user = await prisma.user.findUnique({
+      where: { userId: rotated.userId },
+      select: { role: true },
+    });
+    const role = parseUserRole(user?.role);
+    const accessToken = signAccessToken({ userId: rotated.userId, role });
     res.json({
       accessToken,
       refreshToken: rotated.refreshToken,

@@ -69,7 +69,10 @@ let pendingDeviceCommand: DeviceCommandState | null = null;
 let activeAudioCapture: ActiveAudioCapture | null = null;
 
 /** Device is "online" when it polled or sent presence within this window. */
-const DEVICE_ONLINE_MS = 3000;
+const DEVICE_ONLINE_MS = 12_000;
+
+/** Drop a stuck `audio` command if the bench never confirmed within this window. */
+const AUDIO_COMMAND_STALE_MS = 90_000;
 
 export type IotHardwareState = "offline" | "idle" | "recording" | "uploading";
 
@@ -106,6 +109,7 @@ export function touchDevicePresence(
 }
 
 export function getDevicePresenceSnapshot() {
+  expireStaleAudioCommand();
   const online =
     devicePresence.lastSeenAtMs > 0 &&
     Date.now() - devicePresence.lastSeenAtMs <= DEVICE_ONLINE_MS;
@@ -202,6 +206,48 @@ function markDeviceRecordingStarted() {
       startedAtMs: Date.now(),
       minSeconds: AUDIO_MIN_SECONDS,
     };
+  }
+}
+
+function clearPendingAudioCommand() {
+  if (pendingDeviceCommand?.command === "audio") {
+    pendingDeviceCommand = null;
+  }
+}
+
+/** Expire an `audio` command that was never picked up or finished. */
+function expireStaleAudioCommand() {
+  if (!pendingDeviceCommand || pendingDeviceCommand.command !== "audio") return;
+  const ageMs = Date.now() - new Date(pendingDeviceCommand.queuedAt).getTime();
+  if (ageMs > AUDIO_COMMAND_STALE_MS) {
+    pendingDeviceCommand = null;
+    activeAudioCapture = null;
+  }
+}
+
+/**
+ * Apply consume semantics when the device polls for a command.
+ * `audio` stays queued until the bench confirms recording or upload completes so a
+ * garbled HTTP body or missed poll does not drop the command after one GET.
+ */
+function consumeDeliveredDeviceCommand(current: DeviceCommandState, shouldConsume: boolean) {
+  if (!shouldConsume) return;
+
+  if (current.command === "audio") {
+    markDeviceRecordingStarted();
+    return;
+  }
+
+  if (current.command === "audio upload") {
+    activeAudioCapture = null;
+    if (current === pendingDeviceCommand) {
+      pendingDeviceCommand = null;
+    }
+    return;
+  }
+
+  if (current.command !== "image" && current === pendingDeviceCommand) {
+    pendingDeviceCommand = null;
   }
 }
 
@@ -430,6 +476,7 @@ export async function iotUploadCough(req: Request, res: Response) {
 
   touchDevicePresence("idle", req.ip ?? null);
   activeAudioCapture = null;
+  clearPendingAudioCommand();
 
   res.status(201).json({
     ok: true,
@@ -607,6 +654,7 @@ export function iotReportPresence(req: Request, res: Response) {
   touchDevicePresence(state, req.ip ?? null);
   if (state === "recording") {
     markDeviceRecordingStarted();
+    clearPendingAudioCommand();
   } else if (state === "uploading" || state === "idle") {
     // Bench finished capture — don't leave the mobile timer stuck on "recording".
     activeAudioCapture = null;
@@ -630,6 +678,8 @@ export function iotGetDeviceStatus(_req: Request, res: Response) {
 
 /** GET /iot/device-command */
 export function iotGetDeviceCommand(req: Request, res: Response) {
+  expireStaleAudioCommand();
+
   const pollState =
     parseHardwareState(getSingleValue(req.query.status)) ??
     parseHardwareState(req.header("x-device-state") ?? undefined);
@@ -641,18 +691,8 @@ export function iotGetDeviceCommand(req: Request, res: Response) {
   }
 
   const current = pendingDeviceCommand;
-  const shouldConsume = getConsumeQueryValue(req);
-  if (shouldConsume && current) {
-    // Keep `image` in the queue until upload or a new POST replaces it — avoids
-    // "NO COMMAND" on the next poll while the device is still capturing/uploading.
-    if (current.command !== "image" && current === pendingDeviceCommand) {
-      pendingDeviceCommand = null;
-    }
-    if (current.command === "audio") {
-      markDeviceRecordingStarted();
-    } else if (current.command === "audio upload") {
-      activeAudioCapture = null;
-    }
+  if (current) {
+    consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req));
   }
 
   // ESP32 firmware reads raw body text via client.readString().
@@ -701,16 +741,7 @@ export function iotGetTrigger(req: Request, res: Response) {
     return;
   }
 
-  if (getConsumeQueryValue(req)) {
-    if (current.command !== "image" && current === pendingDeviceCommand) {
-      pendingDeviceCommand = null;
-    }
-    if (current.command === "audio") {
-      markDeviceRecordingStarted();
-    } else if (current.command === "audio upload") {
-      activeAudioCapture = null;
-    }
-  }
+  consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req));
 
   res.json({
     ok: true,

@@ -91,50 +91,54 @@ You should see three version lines.
 
 The `*.pt` model weights are large and not stored in Git. You must copy them from your PC.
 
-The droplet expects them at these paths:
+The droplet expects them at these paths (production hybrid, test macro-F1 **~0.69**):
 
 | Local file on PC | Droplet destination |
 | --- | --- |
-| `ml\runs\20260504_011457\model.pt` | `/root/Tbhon/ml/runs/20260504_011457/model.pt` |
-| `ml (phlegm)\runs\phlegm_afb_20260504_052747\model_best.pt` | `/root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747/model_best.pt` |
+| `ml\runs\20260531_014419\model.pt` | `/root/Tbhon/ml/runs/20260531_014419/model.pt` |
+| `ml\runs\20260531_014419\hybrid_bundle.pkl` | `/root/Tbhon/ml/runs/20260531_014419/hybrid_bundle.pkl` |
+| `ml (phlegm)\runs\phlegm_afb_binary_20260531_133949\model_best.pt` | `/root/Tbhon/ml (phlegm)/runs/phlegm_afb_binary_20260531_133949/model_best.pt` |
 
-Note the phlegm folder is renamed from `ml (phlegm)` to `ml_phlegm` on the droplet. The space and parentheses cause quoting headaches with `scp` from Windows PowerShell. The Python code reads the location from `TB_PHLEGM_MODEL_PATH` env var, so the folder name does not need to match the local one.
+**One-command deploy from repo root:** `npm run ml:deploy-cough` (SCP + restart `tbhon-ml`).
+
+Note the phlegm folder may be renamed from `ml (phlegm)` to `ml_phlegm` on some droplets. The Python code reads locations from `TB_PHLEGM_MODEL_PATH` / `TB_MODEL_PATH` env vars.
 
 ### 7.1. Create The Destination Folders First
 
 From your **PC** (PowerShell):
 
 ```powershell
-ssh root@<ml-droplet-ip> "mkdir -p /root/Tbhon/ml/runs/20260504_011457 /root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747"
+ssh root@<ml-droplet-ip> "mkdir -p /root/Tbhon/ml/runs/20260531_014419"
 ```
 
-### 7.2. Copy The Cough Model
+### 7.2. Copy The Cough Hybrid (model + bundle)
 
 ```powershell
 cd "C:\Project VSC\Tbhon"
-scp "ml\runs\20260504_011457\model.pt" root@<ml-droplet-ip>:/root/Tbhon/ml/runs/20260504_011457/model.pt
+scp "ml\runs\20260531_014419\model.pt" root@<ml-droplet-ip>:/root/Tbhon/ml/runs/20260531_014419/model.pt
+scp "ml\runs\20260531_014419\hybrid_bundle.pkl" root@<ml-droplet-ip>:/root/Tbhon/ml/runs/20260531_014419/hybrid_bundle.pkl
 ```
 
 ### 7.3. Copy The Phlegm Model
 
 ```powershell
-scp "ml (phlegm)\runs\phlegm_afb_20260504_052747\model_best.pt" root@<ml-droplet-ip>:/root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747/model_best.pt
+scp "ml (phlegm)\runs\phlegm_afb_binary_20260531_133949\model_best.pt" root@<ml-droplet-ip>:/root/Tbhon/ml\ \(phlegm\)/runs/phlegm_afb_binary_20260531_133949/model_best.pt
 ```
 
-### 7.4. Verify Both Files Landed
+### 7.4. Verify Files Landed
 
 ```powershell
-ssh root@<ml-droplet-ip> "ls -lh /root/Tbhon/ml/runs/20260504_011457/model.pt /root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747/model_best.pt"
+ssh root@<ml-droplet-ip> "ls -lh /root/Tbhon/ml/runs/20260531_014419/model.pt /root/Tbhon/ml/runs/20260531_014419/hybrid_bundle.pkl"
 ```
 
-Expected sizes: cough model `~4.0M`, phlegm model `~1.3M`.
+Expected: cough `model.pt` ~4M, `hybrid_bundle.pkl` ~1–2M.
 
 ## 8. Smoke-Test The API In The Foreground
 
 Still on the droplet, in `~/Tbhon`:
 
 ```bash
-export TB_MODEL_PATH="/root/Tbhon/ml/runs/20260504_011457/model.pt"
+export TB_MODEL_PATH="/root/Tbhon/ml/runs/20260531_014419/model.pt"
 export TB_PHLEGM_MODEL_PATH="/root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747/model_best.pt"
 
 python -m uvicorn ml.infer_api:app --host 0.0.0.0 --port 8000
@@ -180,7 +184,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/root/Tbhon
-Environment="TB_MODEL_PATH=/root/Tbhon/ml/runs/20260504_011457/model.pt"
+Environment="TB_MODEL_PATH=/root/Tbhon/ml/runs/20260531_014419/model.pt"
 Environment="TB_PHLEGM_MODEL_PATH=/root/Tbhon/ml_phlegm/runs/phlegm_afb_20260504_052747/model_best.pt"
 ExecStart=/root/Tbhon/.venv/bin/python -m uvicorn ml.infer_api:app --host 0.0.0.0 --port 8000
 Restart=always
@@ -247,6 +251,17 @@ All POST endpoints expect multipart form field named `file`.
 
 When you retrain a model on your PC:
 
+**Recommended:** from repo root on your PC:
+
+```powershell
+python ml/scripts/promote_cough_model.py
+npm run ml:deploy-cough
+```
+
+That updates `ml/production_model.json`, uploads `model.pt` + `hybrid_bundle.pkl`, sets `TB_MODEL_PATH` in `tbhon-ml.service`, and restarts the service.
+
+**Manual:**
+
 1. Identify the new run folder, for example `ml/runs/20260601_120000`.
 2. Create the matching folder on the droplet:
 
@@ -254,10 +269,11 @@ When you retrain a model on your PC:
 ssh root@<ml-droplet-ip> "mkdir -p /root/Tbhon/ml/runs/20260601_120000"
 ```
 
-3. Copy the new `model.pt`:
+3. Copy `model.pt` and (for hybrid) `hybrid_bundle.pkl`:
 
 ```powershell
 scp "ml\runs\20260601_120000\model.pt" root@<ml-droplet-ip>:/root/Tbhon/ml/runs/20260601_120000/model.pt
+scp "ml\runs\20260601_120000\hybrid_bundle.pkl" root@<ml-droplet-ip>:/root/Tbhon/ml/runs/20260601_120000/hybrid_bundle.pkl
 ```
 
 4. Update the `Environment="TB_MODEL_PATH=..."` line in `/etc/systemd/system/tbhon-ml.service` to point at the new file.

@@ -57,7 +57,8 @@ Both also run a `cloudflared` quick tunnel under systemd:
 | `~/Tbhon-Backend/.env` | Backend droplet | Production backend config and cloud DB connection |
 | `~/Tbhon-Backend/certs/ca-certificate.crt` | Backend droplet | MySQL TLS CA bundle |
 | `~/Tbhon` | ML droplet | Python venv + ML inference code |
-| `~/Tbhon/ml/runs/<run>/model.pt` | ML droplet | Cough TB model weights |
+| `~/Tbhon/ml/runs/20260531_014419/model.pt` | ML droplet | Cough hybrid CNN+GBM (~0.69 test macro-F1) |
+| `~/Tbhon/ml/runs/20260531_014419/hybrid_bundle.pkl` | ML droplet | GBM bundle for hybrid inference |
 | `~/Tbhon/ml_phlegm/runs/<run>/model_best.pt` | ML droplet | Sputum AFB-load model weights |
 | `/etc/systemd/system/tbhon-ml.service` | ML droplet | ML API systemd unit |
 | `/etc/systemd/system/tbhon-ml-tunnel.service` | ML droplet | ML Cloudflare tunnel systemd unit |

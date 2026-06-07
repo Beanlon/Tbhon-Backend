@@ -9,6 +9,7 @@ import {
   getMyScreening,
   listMyScreenings,
   requestIotCapture,
+  updateScreeningReferral,
   upsertScreeningClient,
 } from "../controllers/screening.controller";
 import {
@@ -21,58 +22,52 @@ import {
 } from "../controllers/screening.media.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 import { requireEmailVerified } from "../middleware/requireEmailVerified.middleware";
+import { requireStaff } from "../middleware/requireStaff.middleware";
 import { upload } from "../utils/upload";
 
 export const screeningRouter = Router();
 
-screeningRouter.post("/", requireAuth, completeScreening);
-screeningRouter.post("/draft", requireAuth, createDraftScreening);
-screeningRouter.post("/iot/request-capture", requireAuth, requestIotCapture);
-screeningRouter.get("/iot/device-status", requireAuth, getIotDeviceStatus);
-screeningRouter.post("/cleanup-incomplete", requireAuth, cleanupIncompleteScreenings);
+const staffScreening = [requireAuth, requireStaff] as const;
+
+screeningRouter.post("/", ...staffScreening, completeScreening);
+screeningRouter.post("/draft", ...staffScreening, createDraftScreening);
+screeningRouter.post("/iot/request-capture", ...staffScreening, requestIotCapture);
+screeningRouter.get("/iot/device-status", ...staffScreening, getIotDeviceStatus);
+screeningRouter.post("/cleanup-incomplete", ...staffScreening, cleanupIncompleteScreenings);
 screeningRouter.get("/", requireAuth, listMyScreenings);
 screeningRouter.get("/export", requireAuth, requireEmailVerified, exportMyScreenings);
-screeningRouter.delete("/:sessionId", requireAuth, deleteIncompleteScreening);
-screeningRouter.put("/:sessionId/client", requireAuth, upsertScreeningClient);
+screeningRouter.delete("/:sessionId", ...staffScreening, deleteIncompleteScreening);
+screeningRouter.put("/:sessionId/client", ...staffScreening, upsertScreeningClient);
+screeningRouter.patch("/:sessionId/referral", ...staffScreening, updateScreeningReferral);
 screeningRouter.get("/:sessionId", requireAuth, getMyScreening);
 
 // --- Raw media (account-scoped, cross-device) -----------------------------
-// Attach raw audio bytes onto a cough_recording row that `completeScreening`
-// already created. This is the path the mobile app uses right after finishing
-// a screening so any signed-in device can later play the original audio.
 screeningRouter.post(
   "/:sessionId/cough-recordings/:recordingId/raw",
-  requireAuth,
+  ...staffScreening,
   upload.single("file"),
   attachCoughRecordingRaw,
 );
-// Attach raw sputum/phlegm bytes onto the sputum_image row.
 screeningRouter.post(
   "/:sessionId/sputum-image/raw",
-  requireAuth,
+  ...staffScreening,
   upload.single("file"),
   attachSputumImageRaw,
 );
 
-// Standalone create endpoints (used when uploading media outside the normal
-// completeScreening flow, e.g. retroactively backfilling or from companion
-// apps). They never delete existing rows.
 screeningRouter.post(
   "/:sessionId/cough-recordings",
-  requireAuth,
+  ...staffScreening,
   upload.single("file"),
   uploadCoughRecording,
 );
 screeningRouter.post(
   "/:sessionId/sputum-image",
-  requireAuth,
+  ...staffScreening,
   upload.single("file"),
   uploadSputumImage,
 );
 
-// Streaming download endpoints. Mobile clients send the user's auth bearer
-// and stream Content-Type-tagged bytes into <Image source={{uri, headers}}>
-// or Expo AV.
 screeningRouter.get(
   "/:sessionId/cough-recordings/:recordingId/file",
   requireAuth,

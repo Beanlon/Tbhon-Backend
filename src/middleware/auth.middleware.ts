@@ -22,7 +22,7 @@ export function requireAuth(req: AuthRequest, _res: Response, next: NextFunction
 
   try {
     const payload = verifyAuthToken(token);
-    req.user = { userId: payload.userId };
+    req.user = { userId: payload.userId, role: payload.role };
     return next();
   } catch {
     return next(new HttpError(401, "Invalid or expired token"));

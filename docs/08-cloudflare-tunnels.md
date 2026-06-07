@@ -165,12 +165,23 @@ Quick tunnels generate a random subdomain every time `cloudflared` starts. The U
 
 The URL **does not change** during normal operation. As long as the droplet stays up and the tunnel service is not restarted, the URL is stable for days.
 
-When the URL changes, you must:
+When the URL changes, on your **Windows dev PC** (repo root):
 
-1. SSH into the droplet.
+```bash
+npm run tunnel:sync
+cd mobile && npx expo start -c
+```
+
+That SSHes both droplets, reads the current `trycloudflare.com` URLs from `journalctl`, and merges them into `mobile/.env` without removing `EXPO_PUBLIC_IOT_API_KEY`.
+
+If SSH is unavailable, use `npm run tunnel:droplets` instead (local cloudflared proxy + auto `.env`).
+
+Manual steps (fallback):
+
+1. SSH into each droplet.
 2. Run `journalctl -u <tunnel-service-name> -n 50 --no-pager` and copy the new URL.
 3. Update `mobile/.env` on your PC.
-4. Restart Expo with `npx expo start --tunnel -c`.
+4. Restart Expo with `npx expo start -c`.
 
 ## 5. Refresh URL Quick Reference
 

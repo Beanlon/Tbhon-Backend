@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import type { SignOptions } from "jsonwebtoken";
+import { parseUserRole, type UserRole } from "../constants/userRole";
 
 function getJwtSecret() {
   const jwtSecret = process.env.JWT_SECRET;
@@ -17,6 +18,7 @@ const accessExpiresIn = (process.env.JWT_ACCESS_EXPIRES_IN ??
 
 export type JwtPayload = {
   userId: string;
+  role: UserRole;
 };
 
 export function signAccessToken(payload: JwtPayload) {
@@ -37,5 +39,6 @@ export function verifyAuthToken(token: string): JwtPayload {
   if (typeof userId !== "string" || !userId.trim()) {
     throw new Error("Invalid auth token");
   }
-  return { userId };
+  const role = parseUserRole((payload as { role?: unknown }).role);
+  return { userId, role };
 }

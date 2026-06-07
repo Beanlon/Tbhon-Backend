@@ -3,6 +3,7 @@ import { prisma } from "../prisma";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
+import { parseUserRole, type UserRole } from "../constants/userRole";
 
 function getAuthenticatedUserId(req: AuthRequest) {
   const userId = req.user?.userId;
@@ -20,6 +21,7 @@ function toUserResponse(user: {
   phoneNumber: string | null;
   emailVerified: boolean;
   emailVerifiedAt: Date | null;
+  role?: UserRole | string | null;
   createdAt: Date;
   updatedAt: Date;
   profile?: unknown;
@@ -30,6 +32,7 @@ function toUserResponse(user: {
     phoneNumber: user.phoneNumber,
     emailVerified: user.emailVerified,
     emailVerifiedAt: user.emailVerifiedAt,
+    role: parseUserRole(user.role),
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
     profile: user.profile ?? null,
