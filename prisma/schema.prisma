@@ -19,6 +19,23 @@ enum ReferralStatus {
   completed
 }
 
+/** Health booth site — staff register with its invite code. */
+model Facility {
+  facilityId String   @id @default(uuid()) @map("facility_id") @db.VarChar(191)
+  name       String   @db.VarChar(255)
+  /** Normalized uppercase code (e.g. RHU-MALAY-2026). */
+  inviteCode String   @unique @map("invite_code") @db.VarChar(64)
+  city       String?  @db.VarChar(100)
+  barangay   String?  @db.VarChar(100)
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  staff User[]
+
+  @@map("facilities")
+}
+
 model User {
   userId       String   @id @default(uuid()) @map("user_id") @db.VarChar(191)
   email        String?  @unique @db.VarChar(255)
@@ -26,6 +43,8 @@ model User {
   passwordHash String   @map("password_hash") @db.VarChar(255)
   /** STAFF/ADMIN = booth operator; PATIENT reserved for future patient portal. */
   role         UserRole @default(STAFF)
+  /** Booth site — required for STAFF (via invite code at signup). */
+  facilityId   String?  @map("facility_id") @db.VarChar(191)
   emailVerified                   Boolean   @default(false) @map("email_verified")
   emailVerifiedAt                 DateTime? @map("email_verified_at")
   emailVerificationCodeHash       String?   @map("email_verification_code_hash") @db.VarChar(255)
@@ -40,9 +59,11 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   profile           UserProfile?
+  facility          Facility?          @relation(fields: [facilityId], references: [facilityId], onDelete: SetNull)
   screeningSessions ScreeningSession[]
   authRefreshTokens AuthRefreshToken[]
 
+  @@index([facilityId])
   @@map("users")
 }
 

@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { login, logout, refreshSession, register } from "../controllers/auth.controller";
+import { validateFacilityInvite } from "../controllers/facility.controller";
 import { sendEmailVerification, verifyEmail } from "../controllers/emailVerification.controller";
 import {
   confirmChangePassword,
@@ -14,6 +15,7 @@ import { requireAuth } from "../middleware/auth.middleware";
 export const authRouter = Router();
 
 authRouter.post("/register", register);
+authRouter.post("/facility-invite/validate", validateFacilityInvite);
 authRouter.post("/login", login);
 authRouter.post("/refresh", refreshSession);
 authRouter.post("/logout", logout);

@@ -3,6 +3,7 @@ import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import { authRouter } from "./routes/auth.routes";
 import { userRouter } from "./routes/user.routes";
+import { adminRouter } from "./routes/admin.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { screeningRouter } from "./routes/screening.routes";
 import { iotRouter } from "./routes/iot.routes";
@@ -60,6 +61,7 @@ app.use(
 
 app.use("/auth", authRouter);
 app.use("/users", userRouter);
+app.use("/admin", adminRouter);
 app.use("/screenings", screeningRouter);
 app.use("/iot", iotRouter);
 

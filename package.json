@@ -9,7 +9,9 @@
     "start": "node dist/server.js",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "test": "node --require ts-node/register/transpile-only --test src/__tests__/staffRoles.test.cjs",
+    "test": "node --require ts-node/register/transpile-only --test src/__tests__/staffRoles.test.cjs src/__tests__/facilityInvite.test.cjs",
+    "facility:create": "ts-node --transpile-only src/scripts/create-facility.ts",
+    "admin:promote": "ts-node --transpile-only src/scripts/promote-admin.ts",
     "gmail:oauth-setup": "ts-node --transpile-only src/scripts/gmail-oauth-setup.ts"
   },
   "repository": {

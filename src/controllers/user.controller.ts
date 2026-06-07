@@ -3,7 +3,7 @@ import { prisma } from "../prisma";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
-import { parseUserRole, type UserRole } from "../constants/userRole";
+import { toUserResponse, userInclude } from "../utils/userResponse";
 
 function getAuthenticatedUserId(req: AuthRequest) {
   const userId = req.user?.userId;
@@ -15,38 +15,12 @@ function getAuthenticatedUserId(req: AuthRequest) {
   return userId;
 }
 
-function toUserResponse(user: {
-  userId: string;
-  email: string | null;
-  phoneNumber: string | null;
-  emailVerified: boolean;
-  emailVerifiedAt: Date | null;
-  role?: UserRole | string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  profile?: unknown;
-}) {
-  return {
-    userId: user.userId,
-    email: user.email,
-    phoneNumber: user.phoneNumber,
-    emailVerified: user.emailVerified,
-    emailVerifiedAt: user.emailVerifiedAt,
-    role: parseUserRole(user.role),
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-    profile: user.profile ?? null,
-  };
-}
-
 export async function getMe(req: AuthRequest, res: Response) {
   const userId = getAuthenticatedUserId(req);
 
   const user = await prisma.user.findUnique({
     where: { userId },
-    include: {
-      profile: true,
-    },
+    include: userInclude,
   });
 
   if (!user) {
@@ -99,9 +73,7 @@ export async function updateMe(req: AuthRequest, res: Response) {
           }
         : {}),
     },
-    include: {
-      profile: true,
-    },
+    include: userInclude,
   });
 
   res.json({ user: toUserResponse(updated) });

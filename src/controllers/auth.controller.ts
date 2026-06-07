@@ -7,34 +7,13 @@ import {
   revokeRefreshToken,
   rotateRefreshToken,
 } from "../services/refreshToken.service";
+import { resolveFacilityForRegistration } from "../services/facility.service";
 import { signAccessToken } from "../utils/auth";
+import { facilityInviteCodeValidationError } from "../utils/facilityInvite";
 import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
-import { parseUserRole, type UserRole } from "../constants/userRole";
-
-function toUserResponse(user: {
-  userId: string;
-  email: string | null;
-  phoneNumber: string | null;
-  emailVerified: boolean;
-  emailVerifiedAt: Date | null;
-  role?: UserRole | string | null;
-  createdAt: Date;
-  updatedAt: Date;
-  profile?: unknown;
-}) {
-  return {
-    userId: user.userId,
-    email: user.email,
-    phoneNumber: user.phoneNumber,
-    emailVerified: user.emailVerified,
-    emailVerifiedAt: user.emailVerifiedAt,
-    role: parseUserRole(user.role),
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-    profile: user.profile ?? null,
-  };
-}
+import { parseUserRole } from "../constants/userRole";
+import { toUserResponse, userInclude } from "../utils/userResponse";
 
 async function issueAuthSession(userId: string) {
   const user = await prisma.user.findUnique({
@@ -64,10 +43,19 @@ export async function register(req: Request, res: Response) {
   const email = getString(req.body.email)?.toLowerCase();
   const phoneNumber = getString(req.body.phoneNumber);
   const password = getString(req.body.password);
+  const facilityInviteCode =
+    getString(req.body.facilityInviteCode) ?? getString(req.body.inviteCode);
 
   if (!email || !password) {
     throw new HttpError(400, "email and password are required");
   }
+
+  const inviteError = facilityInviteCodeValidationError(facilityInviteCode ?? "");
+  if (inviteError) {
+    throw new HttpError(400, inviteError);
+  }
+
+  const facility = await resolveFacilityForRegistration(facilityInviteCode!);
 
   if (password.length < 8) {
     throw new HttpError(400, "password must be at least 8 characters");
@@ -89,11 +77,10 @@ export async function register(req: Request, res: Response) {
       email,
       phoneNumber: phoneNumber ?? null,
       passwordHash,
+      facilityId: facility.facilityId,
       ...(profile ? { profile: { create: profile } } : {}),
     },
-    include: {
-      profile: true,
-    },
+    include: userInclude,
   });
 
   const session = await issueAuthSession(user.userId);
@@ -126,9 +113,7 @@ export async function login(req: Request, res: Response) {
 
   const user = await prisma.user.findUnique({
     where: { email },
-    include: {
-      profile: true,
-    },
+    include: userInclude,
   });
 
   if (!user) {
