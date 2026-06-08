@@ -242,7 +242,7 @@ export async function requestIotCapture(req: AuthRequest, res: Response) {
     throw new HttpError(400, "Request body is required");
   }
   const command = parseDeviceCommand(req.body.command) ?? parseDeviceCommand(req.body.type);
-  if (!command || command === "audio upload") {
+  if (!command || command === "audio upload" || command === "setup check") {
     throw new HttpError(400, "command must be `image` or `audio`");
   }
 
