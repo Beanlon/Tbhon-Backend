@@ -7,6 +7,15 @@ export function generatePatientAccessToken(): string {
   return randomBytes(24).toString("base64url");
 }
 
+/** Stable public code for a PATIENT account — used in permanent "My TBhon QR". */
+export function generatePatientPublicCode(): string {
+  return randomBytes(8).toString("base64url");
+}
+
+export function buildPatientIdUrl(code: string): string {
+  return `tbhon://patient/id?code=${encodeURIComponent(code)}`;
+}
+
 export function buildPatientClaimUrl(token: string): string {
   return `tbhon://patient/claim?token=${encodeURIComponent(token)}`;
 }

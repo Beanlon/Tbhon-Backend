@@ -847,3 +847,50 @@ export async function updateScreeningReferral(req: AuthRequest, res: Response) {
 
   res.json({ ok: true, referral: updated });
 }
+
+/**
+ * POST /screenings/:sessionId/link-patient — staff links an existing PATIENT account to a
+ * draft screening session before or after screening (e.g. returning patient flow).
+ * Body: { patientPublicCode } or { email }
+ */
+export async function linkPatientToSession(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+  if (!isRecord(req.body)) throw new HttpError(400, "Request body is required");
+
+  const code = getString(req.body.patientPublicCode)?.trim();
+  const email = getString(req.body.email)?.trim().toLowerCase();
+  if (!code && !email) throw new HttpError(400, "patientPublicCode or email is required");
+
+  // Verify staff owns the session
+  const session = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+  });
+  if (!session) throw new HttpError(404, "Screening session not found");
+
+  // Resolve PATIENT user
+  const patient = await prisma.user.findFirst({
+    where: code ? { patientPublicCode: code, role: "PATIENT" } : { email, role: "PATIENT" },
+    select: { userId: true, role: true, profile: { select: { firstName: true, lastName: true, birthdate: true, gender: true } } },
+  });
+  if (!patient) {
+    throw new HttpError(404, "No patient account found with that code or email");
+  }
+
+  const now = new Date();
+  await prisma.screeningSession.update({
+    where: { sessionId },
+    data: {
+      patientUserId: patient.userId,
+      patientClaimedAt: now,
+    },
+  });
+
+  res.json({
+    ok: true,
+    sessionId,
+    patientUserId: patient.userId,
+    name: patient.profile ? `${patient.profile.firstName} ${patient.profile.lastName}` : null,
+  });
+}

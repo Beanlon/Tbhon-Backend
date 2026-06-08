@@ -6,6 +6,7 @@ import { createRefreshToken } from "../services/refreshToken.service";
 import { signAccessToken } from "../utils/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import {
+  generatePatientPublicCode,
   isPatientAccessExpired,
   profileInputFromScreeningClient,
   profilePrefillFromScreeningClient,
@@ -13,7 +14,8 @@ import {
 import { maskEmail } from "../utils/emailMask";
 import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
-import { toUserResponse, userInclude } from "../utils/userResponse";
+import { patientLookupSelect, toUserResponse, userInclude } from "../utils/userResponse";
+import type { AuthRequest } from "../types/auth";
 
 async function findSessionByPatientToken(token: string) {
   return prisma.screeningSession.findFirst({
@@ -142,6 +144,7 @@ export async function claimPatientAccess(req: Request, res: Response) {
 
   const passwordHash = await bcrypt.hash(password, 12);
   const now = new Date();
+  const patientPublicCode = generatePatientPublicCode();
 
   const user = await prisma.$transaction(async (tx) => {
     const created = await tx.user.create({
@@ -152,6 +155,7 @@ export async function claimPatientAccess(req: Request, res: Response) {
         role: "PATIENT",
         emailVerified: true,
         emailVerifiedAt: now,
+        patientPublicCode,
         profile: {
           create: {
             profileId: randomUUID(),
@@ -183,5 +187,43 @@ export async function claimPatientAccess(req: Request, res: Response) {
     token: accessToken,
     user: toUserResponse(user),
     sessionId: session.sessionId,
+  });
+}
+
+/**
+ * GET /patient/lookup?code= or ?email= — staff resolves a patient account for booth linking.
+ * Returns minimal confirmation info (name, DOB, masked email) — no JWT or sensitive data.
+ */
+export async function lookupPatient(req: AuthRequest, res: Response) {
+  const code = getString(req.query.code)?.trim();
+  const email = getString(req.query.email)?.trim().toLowerCase();
+
+  if (!code && !email) {
+    throw new HttpError(400, "code or email is required");
+  }
+
+  const patient = await prisma.user.findFirst({
+    where: code ? { patientPublicCode: code, role: "PATIENT" } : { email, role: "PATIENT" },
+    select: patientLookupSelect,
+  });
+
+  if (!patient) {
+    res.json({ found: false });
+    return;
+  }
+
+  const profile = patient.profile;
+  res.json({
+    found: true,
+    patientPublicCode: patient.patientPublicCode,
+    name: profile ? `${profile.firstName} ${profile.lastName}` : null,
+    firstName: profile?.firstName ?? null,
+    lastName: profile?.lastName ?? null,
+    birthdate: profile?.birthdate?.toISOString().slice(0, 10) ?? null,
+    gender: profile?.gender ?? null,
+    street: profile?.street ?? null,
+    barangay: profile?.barangay ?? null,
+    city: profile?.city ?? null,
+    maskedEmail: maskEmail(patient.email),
   });
 }

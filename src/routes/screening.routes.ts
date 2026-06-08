@@ -8,6 +8,7 @@ import {
   getIotDeviceStatus,
   getMyScreening,
   getPatientAccessForSession,
+  linkPatientToSession,
   listMyScreenings,
   requestIotCapture,
   updateScreeningReferral,
@@ -45,6 +46,7 @@ screeningRouter.delete("/:sessionId", ...staffScreening, deleteIncompleteScreeni
 screeningRouter.put("/:sessionId/client", ...staffScreening, upsertScreeningClient);
 screeningRouter.patch("/:sessionId/referral", ...staffScreening, updateScreeningReferral);
 screeningRouter.get("/:sessionId/patient-access", ...staffScreening, getPatientAccessForSession);
+screeningRouter.post("/:sessionId/link-patient", ...staffScreening, linkPatientToSession);
 screeningRouter.get("/:sessionId/patient-recovery", ...staffScreening, getPatientRecoveryForSession);
 screeningRouter.post(
   "/:sessionId/patient-recovery/send-reset",

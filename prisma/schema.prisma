@@ -55,6 +55,8 @@ model User {
   passwordResetExpiresAt          DateTime? @map("password_reset_expires_at")
   passwordResetSentAt             DateTime? @map("password_reset_sent_at")
   passwordResetAttemptCount       Int       @default(0) @map("password_reset_attempt_count")
+  /** Stable public identifier for PATIENT accounts — used in permanent "My TBhon QR". Null for STAFF/ADMIN. */
+  patientPublicCode String? @unique @map("patient_public_code") @db.VarChar(32)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
