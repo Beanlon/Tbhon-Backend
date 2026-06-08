@@ -14,6 +14,7 @@ import { HttpError, getString, isRecord } from "../utils/http";
 import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
 import { toUserResponse, userInclude } from "../utils/userResponse";
+import { passwordPolicyValidationError } from "../utils/passwordPolicy";
 
 async function issueAuthSession(userId: string) {
   const user = await prisma.user.findUnique({
@@ -57,9 +58,8 @@ export async function register(req: Request, res: Response) {
 
   const facility = await resolveFacilityForRegistration(facilityInviteCode!);
 
-  if (password.length < 8) {
-    throw new HttpError(400, "password must be at least 8 characters");
-  }
+  const passwordError = passwordPolicyValidationError(password);
+  if (passwordError) throw new HttpError(400, passwordError);
 
   const existingUser = await prisma.user.findUnique({
     where: { email },

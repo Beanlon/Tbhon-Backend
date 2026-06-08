@@ -16,6 +16,7 @@ import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
 import { patientLookupSelect, toUserResponse, userInclude } from "../utils/userResponse";
 import type { AuthRequest } from "../types/auth";
+import { passwordPolicyValidationError } from "../utils/passwordPolicy";
 
 async function findSessionByPatientToken(token: string) {
   return prisma.screeningSession.findFirst({
@@ -120,7 +121,8 @@ export async function claimPatientAccess(req: Request, res: Response) {
 
   if (!token) throw new HttpError(400, "token is required");
   if (!email || !password) throw new HttpError(400, "email and password are required");
-  if (password.length < 8) throw new HttpError(400, "password must be at least 8 characters");
+  const passwordError = passwordPolicyValidationError(password);
+  if (passwordError) throw new HttpError(400, passwordError);
 
   const session = await findClaimableSession(token);
 

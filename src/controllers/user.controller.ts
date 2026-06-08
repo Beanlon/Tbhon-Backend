@@ -3,6 +3,7 @@ import { prisma } from "../prisma";
 import { syncPatientProfileFromLinkedScreening } from "../services/patientProfile.service";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
+import { generatePatientPublicCode } from "../utils/patientAccess";
 import { parseProfileInput } from "../utils/profile";
 import { toUserResponse, userInclude } from "../utils/userResponse";
 
@@ -23,13 +24,28 @@ export async function getMe(req: AuthRequest, res: Response) {
     await syncPatientProfileFromLinkedScreening(userId);
   }
 
-  const user = await prisma.user.findUnique({
+  let user = await prisma.user.findUnique({
     where: { userId },
     include: userInclude,
   });
 
   if (!user) {
     throw new HttpError(404, "User not found");
+  }
+
+  if (user.role === "PATIENT" && !user.patientPublicCode) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const patientPublicCode = generatePatientPublicCode();
+      const existing = await prisma.user.findUnique({ where: { patientPublicCode } });
+      if (existing) continue;
+
+      user = await prisma.user.update({
+        where: { userId },
+        data: { patientPublicCode },
+        include: userInclude,
+      });
+      break;
+    }
   }
 
   res.json({ user: toUserResponse(user) });
