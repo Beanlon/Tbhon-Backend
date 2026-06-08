@@ -873,7 +873,18 @@ export async function linkPatientToSession(req: AuthRequest, res: Response) {
   const patientSelect = {
     userId: true,
     role: true,
-    profile: { select: { firstName: true, lastName: true, birthdate: true, gender: true } },
+    phoneNumber: true,
+    profile: {
+      select: {
+        firstName: true,
+        lastName: true,
+        birthdate: true,
+        gender: true,
+        street: true,
+        barangay: true,
+        city: true,
+      },
+    },
   } as const;
   const patient = code
     ? await prisma.user.findFirst({
@@ -889,12 +900,53 @@ export async function linkPatientToSession(req: AuthRequest, res: Response) {
   }
 
   const now = new Date();
-  await prisma.screeningSession.update({
-    where: { sessionId },
-    data: {
-      patientUserId: patient.userId,
-      patientClaimedAt: now,
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.screeningSession.update({
+      where: { sessionId },
+      data: {
+        patientUserId: patient.userId,
+        patientClaimedAt: now,
+      },
+    });
+
+    if (patient.profile) {
+      await tx.screeningClient.upsert({
+        where: { sessionId },
+        create: {
+          sessionId,
+          firstName: patient.profile.firstName,
+          middleName: null,
+          lastName: patient.profile.lastName,
+          birthdate: patient.profile.birthdate,
+          gender: patient.profile.gender,
+          street: patient.profile.street,
+          barangay: patient.profile.barangay,
+          city: patient.profile.city,
+          contactNumber: patient.phoneNumber ?? "",
+          emergencyContactName: null,
+          emergencyContactPhone: null,
+          emergencyContactRelation: null,
+          governmentIdType: null,
+          governmentIdNumber: null,
+        },
+        update: {
+          firstName: patient.profile.firstName,
+          middleName: null,
+          lastName: patient.profile.lastName,
+          birthdate: patient.profile.birthdate,
+          gender: patient.profile.gender,
+          street: patient.profile.street,
+          barangay: patient.profile.barangay,
+          city: patient.profile.city,
+          contactNumber: patient.phoneNumber ?? "",
+          emergencyContactName: null,
+          emergencyContactPhone: null,
+          emergencyContactRelation: null,
+          governmentIdType: null,
+          governmentIdNumber: null,
+        },
+      });
+    }
   });
 
   res.json({

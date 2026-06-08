@@ -21,6 +21,7 @@ import { passwordPolicyValidationError } from "../utils/passwordPolicy";
 const patientLookupSelect = {
   userId: true,
   email: true,
+  phoneNumber: true,
   patientPublicCode: true,
   profile: {
     select: {
@@ -248,6 +249,11 @@ export async function lookupPatient(req: AuthRequest, res: Response) {
     street: profile?.street ?? null,
     barangay: profile?.barangay ?? null,
     city: profile?.city ?? null,
+    phoneNumber: patient.phoneNumber ?? null,
+    email: patient.email,
     maskedEmail: maskEmail(patient.email),
+    emergencyContactName: null,
+    emergencyContactPhone: null,
+    emergencyContactRelation: null,
   });
 }
