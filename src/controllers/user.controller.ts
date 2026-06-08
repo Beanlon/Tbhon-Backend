@@ -17,6 +17,34 @@ function getAuthenticatedUserId(req: AuthRequest) {
   return userId;
 }
 
+async function ensurePatientPublicCode(userId: string): Promise<string> {
+  const existingUser = await prisma.user.findUnique({
+    where: { userId },
+    select: { role: true, patientPublicCode: true },
+  });
+
+  if (!existingUser) throw new HttpError(404, "User not found");
+  if (existingUser.role !== "PATIENT") {
+    throw new HttpError(403, "Patient account is required");
+  }
+  if (existingUser.patientPublicCode) return existingUser.patientPublicCode;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const patientPublicCode = generatePatientPublicCode();
+    const existingCode = await prisma.user.findUnique({ where: { patientPublicCode } });
+    if (existingCode) continue;
+
+    const updated = await prisma.user.update({
+      where: { userId },
+      data: { patientPublicCode },
+      select: { patientPublicCode: true },
+    });
+    if (updated.patientPublicCode) return updated.patientPublicCode;
+  }
+
+  throw new HttpError(500, "Could not create patient access code");
+}
+
 export async function getMe(req: AuthRequest, res: Response) {
   const userId = getAuthenticatedUserId(req);
 
@@ -34,21 +62,21 @@ export async function getMe(req: AuthRequest, res: Response) {
   }
 
   if (user.role === "PATIENT" && !user.patientPublicCode) {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const patientPublicCode = generatePatientPublicCode();
-      const existing = await prisma.user.findUnique({ where: { patientPublicCode } });
-      if (existing) continue;
-
-      user = await prisma.user.update({
-        where: { userId },
-        data: { patientPublicCode },
-        include: userInclude,
-      });
-      break;
-    }
+    await ensurePatientPublicCode(userId);
+    user = await prisma.user.findUnique({
+      where: { userId },
+      include: userInclude,
+    });
+    if (!user) throw new HttpError(404, "User not found");
   }
 
   res.json({ user: toUserResponse(user) });
+}
+
+export async function ensureMyPatientCode(req: AuthRequest, res: Response) {
+  const userId = getAuthenticatedUserId(req);
+  const patientPublicCode = await ensurePatientPublicCode(userId);
+  res.json({ patientPublicCode });
 }
 
 export async function updateMe(req: AuthRequest, res: Response) {

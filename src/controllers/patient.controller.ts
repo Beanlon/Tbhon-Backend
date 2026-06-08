@@ -14,9 +14,26 @@ import {
 import { maskEmail } from "../utils/emailMask";
 import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
-import { patientLookupSelect, toUserResponse, userInclude } from "../utils/userResponse";
+import { toUserResponse, userInclude } from "../utils/userResponse";
 import type { AuthRequest } from "../types/auth";
 import { passwordPolicyValidationError } from "../utils/passwordPolicy";
+
+const patientLookupSelect = {
+  userId: true,
+  email: true,
+  patientPublicCode: true,
+  profile: {
+    select: {
+      firstName: true,
+      lastName: true,
+      birthdate: true,
+      gender: true,
+      street: true,
+      barangay: true,
+      city: true,
+    },
+  },
+} as const;
 
 async function findSessionByPatientToken(token: string) {
   return prisma.screeningSession.findFirst({
@@ -204,10 +221,15 @@ export async function lookupPatient(req: AuthRequest, res: Response) {
     throw new HttpError(400, "code or email is required");
   }
 
-  const patient = await prisma.user.findFirst({
-    where: code ? { patientPublicCode: code, role: "PATIENT" } : { email, role: "PATIENT" },
-    select: patientLookupSelect,
-  });
+  const patient = code
+    ? await prisma.user.findFirst({
+        where: { role: "PATIENT", patientPublicCode: code },
+        select: patientLookupSelect,
+      })
+    : await prisma.user.findFirst({
+        where: { email: email!, role: "PATIENT" },
+        select: patientLookupSelect,
+      });
 
   if (!patient) {
     res.json({ found: false });

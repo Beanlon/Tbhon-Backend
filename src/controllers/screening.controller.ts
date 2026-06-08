@@ -870,10 +870,20 @@ export async function linkPatientToSession(req: AuthRequest, res: Response) {
   if (!session) throw new HttpError(404, "Screening session not found");
 
   // Resolve PATIENT user
-  const patient = await prisma.user.findFirst({
-    where: code ? { patientPublicCode: code, role: "PATIENT" } : { email, role: "PATIENT" },
-    select: { userId: true, role: true, profile: { select: { firstName: true, lastName: true, birthdate: true, gender: true } } },
-  });
+  const patientSelect = {
+    userId: true,
+    role: true,
+    profile: { select: { firstName: true, lastName: true, birthdate: true, gender: true } },
+  } as const;
+  const patient = code
+    ? await prisma.user.findFirst({
+        where: { role: "PATIENT", patientPublicCode: code },
+        select: patientSelect,
+      })
+    : await prisma.user.findFirst({
+        where: { email: email!, role: "PATIENT" },
+        select: patientSelect,
+      });
   if (!patient) {
     throw new HttpError(404, "No patient account found with that code or email");
   }
