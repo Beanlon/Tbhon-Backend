@@ -134,9 +134,11 @@ export function getDevicePresenceSnapshot() {
   const online =
     devicePresence.lastSeenAtMs > 0 &&
     Date.now() - devicePresence.lastSeenAtMs <= DEVICE_ONLINE_MS;
-  const state: IotHardwareState = online ? devicePresence.state : "offline";
-  if (state === "idle" || state === "uploading") {
+  let state: IotHardwareState = online ? devicePresence.state : "offline";
+  if (!online || state === "uploading") {
     activeAudioCapture = null;
+  } else if (state === "idle" && activeAudioCapture) {
+    state = "recording";
   }
   const hasPending = pendingDeviceCommand !== null;
   const ready = online && state === "idle" && !hasPending && !activeAudioCapture;
@@ -315,6 +317,7 @@ function consumeDeliveredDeviceCommand(
 
   if (current.command === "audio") {
     markDeviceRecordingStarted();
+    touchDevicePresence("recording", deliveredByIp ?? current.byIp);
     return;
   }
 
