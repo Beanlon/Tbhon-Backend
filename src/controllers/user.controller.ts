@@ -86,10 +86,13 @@ export async function updateMe(req: AuthRequest, res: Response) {
     throw new HttpError(400, "Request body is required");
   }
 
+  const hasEmail = Object.prototype.hasOwnProperty.call(req.body, "email");
+  const hasPhoneNumber = Object.prototype.hasOwnProperty.call(req.body, "phoneNumber");
   const email = getString(req.body.email)?.toLowerCase();
-  const phoneNumber = getString(req.body.phoneNumber);
+  const phoneNumber =
+    req.body.phoneNumber === null ? null : getString(req.body.phoneNumber);
 
-  if (!email && !phoneNumber) {
+  if ((!hasEmail || !email) && !hasPhoneNumber) {
     throw new HttpError(400, "email or phoneNumber is required");
   }
 
@@ -110,7 +113,7 @@ export async function updateMe(req: AuthRequest, res: Response) {
     where: { userId },
     data: {
       ...(email ? { email } : {}),
-      ...(phoneNumber ? { phoneNumber } : {}),
+      ...(hasPhoneNumber ? { phoneNumber: phoneNumber || null } : {}),
       ...(emailChanged
         ? {
             emailVerified: false,

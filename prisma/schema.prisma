@@ -96,6 +96,11 @@ model UserProfile {
   street    String?  @db.VarChar(255)
   barangay  String?  @db.VarChar(100)
   city      String?  @db.VarChar(100)
+  emergencyContactName     String?  @map("emergency_contact_name") @db.VarChar(100)
+  emergencyContactPhone    String?  @map("emergency_contact_phone") @db.VarChar(30)
+  emergencyContactRelation String?  @map("emergency_contact_relation") @db.VarChar(60)
+  governmentIdType         String?  @map("government_id_type") @db.VarChar(50)
+  governmentIdNumber       String?  @map("government_id_number") @db.VarChar(100)
 
   user User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 

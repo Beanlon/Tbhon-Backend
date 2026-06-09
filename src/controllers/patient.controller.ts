@@ -32,6 +32,9 @@ const patientLookupSelect = {
       street: true,
       barangay: true,
       city: true,
+      emergencyContactName: true,
+      emergencyContactPhone: true,
+      emergencyContactRelation: true,
     },
   },
 } as const;
@@ -149,10 +152,21 @@ export async function claimPatientAccess(req: Request, res: Response) {
     throw new HttpError(409, "Email is already registered — sign in instead");
   }
 
-  let profileInput =
-    req.body.profile === undefined ? undefined : parseProfileInput(req.body.profile);
-  if (!profileInput && session.client) {
-    profileInput = profileInputFromScreeningClient(session.client);
+  const boothProfileInput = session.client ? profileInputFromScreeningClient(session.client) : null;
+  let profileInput = req.body.profile === undefined ? undefined : parseProfileInput(req.body.profile);
+  if (profileInput && boothProfileInput) {
+    profileInput = {
+      ...profileInput,
+      emergencyContactName: profileInput.emergencyContactName ?? boothProfileInput.emergencyContactName,
+      emergencyContactPhone: profileInput.emergencyContactPhone ?? boothProfileInput.emergencyContactPhone,
+      emergencyContactRelation:
+        profileInput.emergencyContactRelation ?? boothProfileInput.emergencyContactRelation,
+      governmentIdType: profileInput.governmentIdType ?? boothProfileInput.governmentIdType,
+      governmentIdNumber: profileInput.governmentIdNumber ?? boothProfileInput.governmentIdNumber,
+    };
+  }
+  if (!profileInput && boothProfileInput) {
+    profileInput = boothProfileInput;
   }
   if (!profileInput) {
     throw new HttpError(400, "Profile information is required");
@@ -252,8 +266,8 @@ export async function lookupPatient(req: AuthRequest, res: Response) {
     phoneNumber: patient.phoneNumber ?? null,
     email: patient.email,
     maskedEmail: maskEmail(patient.email),
-    emergencyContactName: null,
-    emergencyContactPhone: null,
-    emergencyContactRelation: null,
+    emergencyContactName: profile?.emergencyContactName ?? null,
+    emergencyContactPhone: profile?.emergencyContactPhone ?? null,
+    emergencyContactRelation: profile?.emergencyContactRelation ?? null,
   });
 }
