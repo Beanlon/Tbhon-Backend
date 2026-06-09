@@ -187,8 +187,8 @@ export async function claimPatientAccess(req: Request, res: Response) {
         phoneNumber: resolvedPhone,
         passwordHash,
         role: "PATIENT",
-        emailVerified: true,
-        emailVerifiedAt: now,
+        emailVerified: false,
+        emailVerifiedAt: null,
         patientPublicCode,
         profile: {
           create: {
