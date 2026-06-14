@@ -24,18 +24,20 @@ import { normalizeAudioMime, normalizeImageMime, readUploadedFile, toBytes } fro
 
 type Body = Record<string, unknown>;
 
-type DeviceCommandType = "image" | "audio" | "audio upload";
+type DeviceCommandType = "image" | "audio" | "audio upload" | "setup check";
 
 const AUDIO_MIN_SECONDS = 3;
 const AUDIO_MAX_SECONDS = 10;
 
-type DeviceCommandSource = "device-command" | "trigger" | "mobile";
+type DeviceCommandSource = "device-command" | "trigger" | "mobile" | "setup";
 
 export type DeviceCommandContext = {
   userId?: string;
   sessionId?: string;
   /** Which cough slot (1-based) this audio command is for. */
   coughAttempt?: number;
+  setupCheckId?: string;
+  message?: string;
 };
 
 type DeviceCommandState = {
@@ -46,6 +48,8 @@ type DeviceCommandState = {
   userId?: string;
   sessionId?: string;
   coughAttempt?: number;
+  setupCheckId?: string;
+  message?: string;
 };
 
 export type QueueDeviceCommandResult = {
@@ -58,6 +62,7 @@ export type QueueDeviceCommandResult = {
   userId: string | null;
   sessionId: string | null;
   coughAttempt: number | null;
+  setupCheckId: string | null;
 };
 
 type ActiveAudioCapture = {
@@ -67,6 +72,22 @@ type ActiveAudioCapture = {
 
 let pendingDeviceCommand: DeviceCommandState | null = null;
 let activeAudioCapture: ActiveAudioCapture | null = null;
+
+type SetupCheckStatus = "queued" | "delivered" | "acknowledged" | "expired";
+
+type SetupCheckState = {
+  checkId: string;
+  message: string;
+  queuedAtMs: number;
+  expiresAtMs: number;
+  deliveredAtMs: number | null;
+  acknowledgedAtMs: number | null;
+  acknowledgementMessage: string | null;
+  byIp: string;
+};
+
+const SETUP_CHECK_TIMEOUT_MS = 20_000;
+const setupChecks = new Map<string, SetupCheckState>();
 
 /** Device is "online" when it polled or sent presence within this window. */
 const DEVICE_ONLINE_MS = 12_000;
@@ -113,9 +134,11 @@ export function getDevicePresenceSnapshot() {
   const online =
     devicePresence.lastSeenAtMs > 0 &&
     Date.now() - devicePresence.lastSeenAtMs <= DEVICE_ONLINE_MS;
-  const state: IotHardwareState = online ? devicePresence.state : "offline";
-  if (state === "idle" || state === "uploading") {
+  let state: IotHardwareState = online ? devicePresence.state : "offline";
+  if (!online || state === "uploading") {
     activeAudioCapture = null;
+  } else if (state === "idle" && activeAudioCapture) {
+    state = "recording";
   }
   const hasPending = pendingDeviceCommand !== null;
   const ready = online && state === "idle" && !hasPending && !activeAudioCapture;
@@ -174,6 +197,9 @@ export function parseDeviceCommand(raw: unknown): DeviceCommandType | null {
   if (typeof raw !== "string") return null;
   const normalized = raw.trim().toLowerCase();
   if (normalized === "image") return "image";
+  if (["setup", "setup check", "setup-check", "setup_check", "device check"].includes(normalized)) {
+    return "setup check";
+  }
   if (["audio", "audio start", "audio-start", "audio_start"].includes(normalized)) {
     return "audio";
   }
@@ -215,6 +241,58 @@ function clearPendingAudioCommand() {
   }
 }
 
+function pruneExpiredSetupChecks() {
+  const now = Date.now();
+  for (const [checkId, check] of setupChecks) {
+    if (
+      now > check.expiresAtMs &&
+      pendingDeviceCommand?.command === "setup check" &&
+      pendingDeviceCommand.setupCheckId === checkId
+    ) {
+      pendingDeviceCommand = null;
+    }
+    if (now - check.expiresAtMs > SETUP_CHECK_TIMEOUT_MS) {
+      setupChecks.delete(checkId);
+    }
+  }
+  if (
+    pendingDeviceCommand?.command === "setup check" &&
+    pendingDeviceCommand.setupCheckId &&
+    !setupChecks.has(pendingDeviceCommand.setupCheckId)
+  ) {
+    pendingDeviceCommand = null;
+  }
+}
+
+function setupCheckStatus(check: SetupCheckState): SetupCheckStatus {
+  if (check.acknowledgedAtMs) return "acknowledged";
+  if (Date.now() > check.expiresAtMs) return "expired";
+  if (check.deliveredAtMs) return "delivered";
+  return "queued";
+}
+
+function setupCheckPayload(check: SetupCheckState) {
+  return {
+    checkId: check.checkId,
+    message: check.message,
+    status: setupCheckStatus(check),
+    queuedAt: new Date(check.queuedAtMs).toISOString(),
+    expiresAt: new Date(check.expiresAtMs).toISOString(),
+    deliveredAt: check.deliveredAtMs ? new Date(check.deliveredAtMs).toISOString() : null,
+    acknowledgedAt: check.acknowledgedAtMs
+      ? new Date(check.acknowledgedAtMs).toISOString()
+      : null,
+    acknowledgementMessage: check.acknowledgementMessage,
+  };
+}
+
+function markSetupCheckDelivered(checkId?: string) {
+  if (!checkId) return;
+  const check = setupChecks.get(checkId);
+  if (!check || check.deliveredAtMs) return;
+  check.deliveredAtMs = Date.now();
+}
+
 /** Expire an `audio` command that was never picked up or finished. */
 function expireStaleAudioCommand() {
   if (!pendingDeviceCommand || pendingDeviceCommand.command !== "audio") return;
@@ -230,16 +308,30 @@ function expireStaleAudioCommand() {
  * `audio` stays queued until the bench confirms recording or upload completes so a
  * garbled HTTP body or missed poll does not drop the command after one GET.
  */
-function consumeDeliveredDeviceCommand(current: DeviceCommandState, shouldConsume: boolean) {
+function consumeDeliveredDeviceCommand(
+  current: DeviceCommandState,
+  shouldConsume: boolean,
+  deliveredByIp?: string | null,
+) {
   if (!shouldConsume) return;
 
   if (current.command === "audio") {
     markDeviceRecordingStarted();
+    touchDevicePresence("recording", deliveredByIp ?? current.byIp);
     return;
   }
 
   if (current.command === "audio upload") {
     activeAudioCapture = null;
+    if (current === pendingDeviceCommand) {
+      pendingDeviceCommand = null;
+    }
+    return;
+  }
+
+  if (current.command === "setup check") {
+    markSetupCheckDelivered(current.setupCheckId);
+    touchDevicePresence("idle", deliveredByIp ?? current.byIp);
     if (current === pendingDeviceCommand) {
       pendingDeviceCommand = null;
     }
@@ -270,13 +362,15 @@ function assertAudioUploadAllowed() {
  * With app context: one-line JSON, e.g. {"command":"image","userId":"...","sessionId":"..."}
  */
 function formatDeviceCommandForFirmware(command: DeviceCommandState): string {
-  if (command.userId || command.sessionId) {
+  if (command.userId || command.sessionId || command.setupCheckId || command.message) {
     return JSON.stringify({
       command: command.command,
       queuedAt: command.queuedAt,
       ...(command.userId ? { userId: command.userId } : {}),
       ...(command.sessionId ? { sessionId: command.sessionId } : {}),
       ...(command.coughAttempt != null ? { coughAttempt: command.coughAttempt } : {}),
+      ...(command.setupCheckId ? { setupCheckId: command.setupCheckId } : {}),
+      ...(command.message ? { message: command.message } : {}),
     });
   }
   return command.command;
@@ -324,6 +418,8 @@ export function queueDeviceCommand(
     ...(context?.userId ? { userId: context.userId } : {}),
     ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
     ...(context?.coughAttempt != null ? { coughAttempt: context.coughAttempt } : {}),
+    ...(context?.setupCheckId ? { setupCheckId: context.setupCheckId } : {}),
+    ...(context?.message ? { message: context.message } : {}),
   };
   pendingDeviceCommand = queued;
 
@@ -337,6 +433,7 @@ export function queueDeviceCommand(
     userId: queued.userId ?? null,
     sessionId: queued.sessionId ?? null,
     coughAttempt: queued.coughAttempt ?? null,
+    setupCheckId: queued.setupCheckId ?? null,
   };
 }
 
@@ -591,6 +688,91 @@ export function iotDebugRecentUploads(req: Request, res: Response) {
   });
 }
 
+/** POST /iot/setup-check — queue a harmless command and wait for firmware acknowledgement. */
+export function iotStartSetupCheck(req: Request, res: Response) {
+  pruneExpiredSetupChecks();
+  const body = bodyOf(req);
+  const checkId = randomUUID();
+  const message =
+    getString(body.message) ??
+    "TBhon setup check received. Reply to /iot/setup-check/ack.";
+  const now = Date.now();
+  const check: SetupCheckState = {
+    checkId,
+    message,
+    queuedAtMs: now,
+    expiresAtMs: now + SETUP_CHECK_TIMEOUT_MS,
+    deliveredAtMs: null,
+    acknowledgedAtMs: null,
+    acknowledgementMessage: null,
+    byIp: req.ip ?? "unknown",
+  };
+  setupChecks.set(checkId, check);
+
+  const queued = queueDeviceCommand(
+    "setup check",
+    {
+      source: "setup",
+      byIp: req.ip ?? "unknown",
+    },
+    {
+      setupCheckId: checkId,
+      message,
+    },
+  );
+
+  res.status(201).json({
+    ok: true,
+    ...queued,
+    check: setupCheckPayload(check),
+  });
+}
+
+/** GET /iot/setup-check/:checkId — app polls until firmware acknowledges the setup check. */
+export function iotGetSetupCheck(req: Request, res: Response) {
+  pruneExpiredSetupChecks();
+  const checkId = getString(req.params.checkId);
+  if (!checkId) {
+    throw new HttpError(400, "checkId is required");
+  }
+  const check = setupChecks.get(checkId);
+  if (!check) {
+    throw new HttpError(404, "Unknown setup check");
+  }
+  res.json({
+    ok: true,
+    check: setupCheckPayload(check),
+    device: getDevicePresenceSnapshot(),
+  });
+}
+
+/** POST /iot/setup-check/ack — firmware confirms it received and printed the setup command. */
+export function iotAcknowledgeSetupCheck(req: Request, res: Response) {
+  pruneExpiredSetupChecks();
+  const body = bodyOf(req);
+  const checkId = getString(body.setupCheckId) ?? getString(body.checkId);
+  if (!checkId) {
+    throw new HttpError(400, "setupCheckId is required");
+  }
+
+  const check = setupChecks.get(checkId);
+  if (!check) {
+    throw new HttpError(404, "Unknown setup check");
+  }
+
+  const state = parseHardwareState(getString(body.state)) ?? "idle";
+  touchDevicePresence(state, req.ip ?? null);
+  check.acknowledgedAtMs = Date.now();
+  check.acknowledgementMessage =
+    getString(body.message) ?? "Device is turned on and connected.";
+
+  res.json({
+    ok: true,
+    check: setupCheckPayload(check),
+    device: getDevicePresenceSnapshot(),
+  });
+}
+
 /** POST /iot/hello */
 export function iotHello(req: Request, res: Response) {
   const body = req.body;
@@ -620,7 +802,10 @@ export async function iotDeviceCommand(req: Request, res: Response) {
     parseDeviceCommand(body.mode);
 
   if (!command) {
-    throw new HttpError(400, "command is required and must be `image`, `audio`, or `audio upload`");
+    throw new HttpError(
+      400,
+      "command is required and must be `image`, `audio`, `audio upload`, or `setup check`",
+    );
   }
 
   const context = readDeviceCommandContext(body);
@@ -692,7 +877,7 @@ export function iotGetDeviceCommand(req: Request, res: Response) {
 
   const current = pendingDeviceCommand;
   if (current) {
-    consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req));
+    consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req), req.ip ?? null);
   }
 
   // ESP32 firmware reads raw body text via client.readString().
@@ -709,7 +894,10 @@ export async function iotSetTrigger(req: Request, res: Response) {
     parseDeviceCommand(body.type);
 
   if (!command) {
-    throw new HttpError(400, "command is required and must be `image`, `audio`, or `audio upload`");
+    throw new HttpError(
+      400,
+      "command is required and must be `image`, `audio`, `audio upload`, or `setup check`",
+    );
   }
 
   const context = readDeviceCommandContext(body);
@@ -741,7 +929,7 @@ export function iotGetTrigger(req: Request, res: Response) {
     return;
   }
 
-  consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req));
+  consumeDeliveredDeviceCommand(current, getConsumeQueryValue(req), req.ip ?? null);
 
   res.json({
     ok: true,

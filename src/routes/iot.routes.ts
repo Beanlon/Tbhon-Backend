@@ -1,8 +1,10 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
 import {
+  iotAcknowledgeSetupCheck,
   iotDebugRecentUploads,
   iotDeviceCommand,
+  iotGetSetupCheck,
   iotGetDeviceCommand,
   iotGetDeviceStatus,
   iotGetTrigger,
@@ -10,6 +12,7 @@ import {
   iotDownloadSputum,
   iotHealth,
   iotHello,
+  iotStartSetupCheck,
   iotSetTrigger,
   iotUploadCough,
   iotUploadSputum,
@@ -41,6 +44,9 @@ iotRouter.post("/device-command", requireIotKey, iotDeviceCommand);
 iotRouter.get("/device-command", requireIotKey, iotGetDeviceCommand);
 iotRouter.post("/presence", requireIotKey, iotReportPresence);
 iotRouter.get("/device-status", requireIotKey, iotGetDeviceStatus);
+iotRouter.post("/setup-check", requireIotKey, iotStartSetupCheck);
+iotRouter.post("/setup-check/ack", requireIotKey, iotAcknowledgeSetupCheck);
+iotRouter.get("/setup-check/:checkId", requireIotKey, iotGetSetupCheck);
 
 // All upload endpoints require the shared device key.
 iotRouter.post(

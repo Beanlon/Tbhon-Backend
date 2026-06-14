@@ -3,6 +3,7 @@ import { prisma } from "../prisma";
 import { syncPatientProfileFromLinkedScreening } from "../services/patientProfile.service";
 import type { AuthRequest } from "../types/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
+import { generatePatientPublicCode } from "../utils/patientAccess";
 import { parseProfileInput } from "../utils/profile";
 import { toUserResponse, userInclude } from "../utils/userResponse";
 
@@ -16,6 +17,34 @@ function getAuthenticatedUserId(req: AuthRequest) {
   return userId;
 }
 
+async function ensurePatientPublicCode(userId: string): Promise<string> {
+  const existingUser = await prisma.user.findUnique({
+    where: { userId },
+    select: { role: true, patientPublicCode: true },
+  });
+
+  if (!existingUser) throw new HttpError(404, "User not found");
+  if (existingUser.role !== "PATIENT") {
+    throw new HttpError(403, "Patient account is required");
+  }
+  if (existingUser.patientPublicCode) return existingUser.patientPublicCode;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const patientPublicCode = generatePatientPublicCode();
+    const existingCode = await prisma.user.findUnique({ where: { patientPublicCode } });
+    if (existingCode) continue;
+
+    const updated = await prisma.user.update({
+      where: { userId },
+      data: { patientPublicCode },
+      select: { patientPublicCode: true },
+    });
+    if (updated.patientPublicCode) return updated.patientPublicCode;
+  }
+
+  throw new HttpError(500, "Could not create patient access code");
+}
+
 export async function getMe(req: AuthRequest, res: Response) {
   const userId = getAuthenticatedUserId(req);
 
@@ -23,7 +52,7 @@ export async function getMe(req: AuthRequest, res: Response) {
     await syncPatientProfileFromLinkedScreening(userId);
   }
 
-  const user = await prisma.user.findUnique({
+  let user = await prisma.user.findUnique({
     where: { userId },
     include: userInclude,
   });
@@ -32,7 +61,22 @@ export async function getMe(req: AuthRequest, res: Response) {
     throw new HttpError(404, "User not found");
   }
 
+  if (user.role === "PATIENT" && !user.patientPublicCode) {
+    await ensurePatientPublicCode(userId);
+    user = await prisma.user.findUnique({
+      where: { userId },
+      include: userInclude,
+    });
+    if (!user) throw new HttpError(404, "User not found");
+  }
+
   res.json({ user: toUserResponse(user) });
+}
+
+export async function ensureMyPatientCode(req: AuthRequest, res: Response) {
+  const userId = getAuthenticatedUserId(req);
+  const patientPublicCode = await ensurePatientPublicCode(userId);
+  res.json({ patientPublicCode });
 }
 
 export async function updateMe(req: AuthRequest, res: Response) {
@@ -42,10 +86,13 @@ export async function updateMe(req: AuthRequest, res: Response) {
     throw new HttpError(400, "Request body is required");
   }
 
+  const hasEmail = Object.prototype.hasOwnProperty.call(req.body, "email");
+  const hasPhoneNumber = Object.prototype.hasOwnProperty.call(req.body, "phoneNumber");
   const email = getString(req.body.email)?.toLowerCase();
-  const phoneNumber = getString(req.body.phoneNumber);
+  const phoneNumber =
+    req.body.phoneNumber === null ? null : getString(req.body.phoneNumber);
 
-  if (!email && !phoneNumber) {
+  if ((!hasEmail || !email) && !hasPhoneNumber) {
     throw new HttpError(400, "email or phoneNumber is required");
   }
 
@@ -66,7 +113,7 @@ export async function updateMe(req: AuthRequest, res: Response) {
     where: { userId },
     data: {
       ...(email ? { email } : {}),
-      ...(phoneNumber ? { phoneNumber } : {}),
+      ...(hasPhoneNumber ? { phoneNumber: phoneNumber || null } : {}),
       ...(emailChanged
         ? {
             emailVerified: false,

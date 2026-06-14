@@ -6,9 +6,13 @@ import { getAuthenticatedUserId } from "../middleware/auth.middleware";
 import { HttpError, getString } from "../utils/http";
 import { normalizeAudioMime, normalizeImageMime, readUploadedFile, toBytes } from "../utils/upload";
 
-async function findOwnedSession(sessionId: string, userId: string) {
+function isPatientRequest(req: AuthRequest): boolean {
+  return req.user?.role === "PATIENT";
+}
+
+async function findOwnedSession(sessionId: string, userId: string, opts: { patientAccess?: boolean } = {}) {
   const session = await prisma.screeningSession.findFirst({
-    where: { sessionId, userId },
+    where: opts.patientAccess ? { sessionId, patientUserId: userId } : { sessionId, userId },
     select: { sessionId: true },
   });
   if (!session) throw new HttpError(404, "Screening session not found");
@@ -232,7 +236,7 @@ export async function downloadCoughRecording(req: AuthRequest, res: Response) {
   const recordingId = getString(req.params.recordingId);
   if (!sessionId || !recordingId) throw new HttpError(400, "sessionId and recordingId are required");
 
-  await findOwnedSession(sessionId, userId);
+  await findOwnedSession(sessionId, userId, { patientAccess: isPatientRequest(req) });
 
   const row = await prisma.coughRecording.findFirst({
     where: { recordingId, sessionId },
@@ -256,7 +260,7 @@ export async function downloadSputumImage(req: AuthRequest, res: Response) {
   const sessionId = getString(req.params.sessionId);
   if (!sessionId) throw new HttpError(400, "sessionId is required");
 
-  await findOwnedSession(sessionId, userId);
+  await findOwnedSession(sessionId, userId, { patientAccess: isPatientRequest(req) });
 
   const row = await prisma.sputumImage.findUnique({
     where: { sessionId },

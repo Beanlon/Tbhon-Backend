@@ -6,6 +6,7 @@ import { createRefreshToken } from "../services/refreshToken.service";
 import { signAccessToken } from "../utils/auth";
 import { HttpError, getString, isRecord } from "../utils/http";
 import {
+  generatePatientPublicCode,
   isPatientAccessExpired,
   profileInputFromScreeningClient,
   profilePrefillFromScreeningClient,
@@ -14,6 +15,29 @@ import { maskEmail } from "../utils/emailMask";
 import { parseProfileInput } from "../utils/profile";
 import { parseUserRole } from "../constants/userRole";
 import { toUserResponse, userInclude } from "../utils/userResponse";
+import type { AuthRequest } from "../types/auth";
+import { passwordPolicyValidationError } from "../utils/passwordPolicy";
+
+const patientLookupSelect = {
+  userId: true,
+  email: true,
+  phoneNumber: true,
+  patientPublicCode: true,
+  profile: {
+    select: {
+      firstName: true,
+      lastName: true,
+      birthdate: true,
+      gender: true,
+      street: true,
+      barangay: true,
+      city: true,
+      emergencyContactName: true,
+      emergencyContactPhone: true,
+      emergencyContactRelation: true,
+    },
+  },
+} as const;
 
 async function findSessionByPatientToken(token: string) {
   return prisma.screeningSession.findFirst({
@@ -118,7 +142,8 @@ export async function claimPatientAccess(req: Request, res: Response) {
 
   if (!token) throw new HttpError(400, "token is required");
   if (!email || !password) throw new HttpError(400, "email and password are required");
-  if (password.length < 8) throw new HttpError(400, "password must be at least 8 characters");
+  const passwordError = passwordPolicyValidationError(password);
+  if (passwordError) throw new HttpError(400, passwordError);
 
   const session = await findClaimableSession(token);
 
@@ -127,10 +152,21 @@ export async function claimPatientAccess(req: Request, res: Response) {
     throw new HttpError(409, "Email is already registered — sign in instead");
   }
 
-  let profileInput =
-    req.body.profile === undefined ? undefined : parseProfileInput(req.body.profile);
-  if (!profileInput && session.client) {
-    profileInput = profileInputFromScreeningClient(session.client);
+  const boothProfileInput = session.client ? profileInputFromScreeningClient(session.client) : null;
+  let profileInput = req.body.profile === undefined ? undefined : parseProfileInput(req.body.profile);
+  if (profileInput && boothProfileInput) {
+    profileInput = {
+      ...profileInput,
+      emergencyContactName: profileInput.emergencyContactName ?? boothProfileInput.emergencyContactName,
+      emergencyContactPhone: profileInput.emergencyContactPhone ?? boothProfileInput.emergencyContactPhone,
+      emergencyContactRelation:
+        profileInput.emergencyContactRelation ?? boothProfileInput.emergencyContactRelation,
+      governmentIdType: profileInput.governmentIdType ?? boothProfileInput.governmentIdType,
+      governmentIdNumber: profileInput.governmentIdNumber ?? boothProfileInput.governmentIdNumber,
+    };
+  }
+  if (!profileInput && boothProfileInput) {
+    profileInput = boothProfileInput;
   }
   if (!profileInput) {
     throw new HttpError(400, "Profile information is required");
@@ -142,6 +178,7 @@ export async function claimPatientAccess(req: Request, res: Response) {
 
   const passwordHash = await bcrypt.hash(password, 12);
   const now = new Date();
+  const patientPublicCode = generatePatientPublicCode();
 
   const user = await prisma.$transaction(async (tx) => {
     const created = await tx.user.create({
@@ -150,8 +187,9 @@ export async function claimPatientAccess(req: Request, res: Response) {
         phoneNumber: resolvedPhone,
         passwordHash,
         role: "PATIENT",
-        emailVerified: true,
-        emailVerifiedAt: now,
+        emailVerified: false,
+        emailVerifiedAt: null,
+        patientPublicCode,
         profile: {
           create: {
             profileId: randomUUID(),
@@ -183,5 +221,53 @@ export async function claimPatientAccess(req: Request, res: Response) {
     token: accessToken,
     user: toUserResponse(user),
     sessionId: session.sessionId,
+  });
+}
+
+/**
+ * GET /patient/lookup?code= or ?email= — staff resolves a patient account for booth linking.
+ * Returns minimal confirmation info (name, DOB, masked email) — no JWT or sensitive data.
+ */
+export async function lookupPatient(req: AuthRequest, res: Response) {
+  const code = getString(req.query.code)?.trim();
+  const email = getString(req.query.email)?.trim().toLowerCase();
+
+  if (!code && !email) {
+    throw new HttpError(400, "code or email is required");
+  }
+
+  const patient = code
+    ? await prisma.user.findFirst({
+        where: { role: "PATIENT", patientPublicCode: code },
+        select: patientLookupSelect,
+      })
+    : await prisma.user.findFirst({
+        where: { email: email!, role: "PATIENT" },
+        select: patientLookupSelect,
+      });
+
+  if (!patient) {
+    res.json({ found: false });
+    return;
+  }
+
+  const profile = patient.profile;
+  res.json({
+    found: true,
+    patientPublicCode: patient.patientPublicCode,
+    name: profile ? `${profile.firstName} ${profile.lastName}` : null,
+    firstName: profile?.firstName ?? null,
+    lastName: profile?.lastName ?? null,
+    birthdate: profile?.birthdate?.toISOString().slice(0, 10) ?? null,
+    gender: profile?.gender ?? null,
+    street: profile?.street ?? null,
+    barangay: profile?.barangay ?? null,
+    city: profile?.city ?? null,
+    phoneNumber: patient.phoneNumber ?? null,
+    email: patient.email,
+    maskedEmail: maskEmail(patient.email),
+    emergencyContactName: profile?.emergencyContactName ?? null,
+    emergencyContactPhone: profile?.emergencyContactPhone ?? null,
+    emergencyContactRelation: profile?.emergencyContactRelation ?? null,
   });
 }

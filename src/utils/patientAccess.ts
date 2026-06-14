@@ -7,6 +7,15 @@ export function generatePatientAccessToken(): string {
   return randomBytes(24).toString("base64url");
 }
 
+/** Stable public code for a PATIENT account — used in permanent "My TBhon QR". */
+export function generatePatientPublicCode(): string {
+  return randomBytes(8).toString("base64url");
+}
+
+export function buildPatientIdUrl(code: string): string {
+  return `tbhon://patient/id?code=${encodeURIComponent(code)}`;
+}
+
 export function buildPatientClaimUrl(token: string): string {
   return `tbhon://patient/claim?token=${encodeURIComponent(token)}`;
 }
@@ -31,6 +40,11 @@ export function profilePrefillFromScreeningClient(client: {
   barangay: string | null;
   city: string | null;
   contactNumber: string;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  emergencyContactRelation?: string | null;
+  governmentIdType?: string | null;
+  governmentIdNumber?: string | null;
 }) {
   return {
     firstName: client.firstName,
@@ -41,6 +55,11 @@ export function profilePrefillFromScreeningClient(client: {
     barangay: client.barangay,
     city: client.city,
     phoneNumber: client.contactNumber,
+    emergencyContactName: client.emergencyContactName ?? null,
+    emergencyContactPhone: client.emergencyContactPhone ?? null,
+    emergencyContactRelation: client.emergencyContactRelation ?? null,
+    governmentIdType: client.governmentIdType ?? null,
+    governmentIdNumber: client.governmentIdNumber ?? null,
   };
 }
 
@@ -52,6 +71,11 @@ export function profileInputFromScreeningClient(client: {
   street: string | null;
   barangay: string | null;
   city: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
+  emergencyContactRelation?: string | null;
+  governmentIdType?: string | null;
+  governmentIdNumber?: string | null;
 }) {
   return {
     firstName: client.firstName,
@@ -61,5 +85,10 @@ export function profileInputFromScreeningClient(client: {
     street: client.street,
     barangay: client.barangay,
     city: client.city,
+    emergencyContactName: client.emergencyContactName ?? null,
+    emergencyContactPhone: client.emergencyContactPhone ?? null,
+    emergencyContactRelation: client.emergencyContactRelation ?? null,
+    governmentIdType: client.governmentIdType ?? null,
+    governmentIdNumber: client.governmentIdNumber ?? null,
   };
 }

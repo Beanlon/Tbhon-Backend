@@ -55,6 +55,8 @@ model User {
   passwordResetExpiresAt          DateTime? @map("password_reset_expires_at")
   passwordResetSentAt             DateTime? @map("password_reset_sent_at")
   passwordResetAttemptCount       Int       @default(0) @map("password_reset_attempt_count")
+  /** Stable public identifier for PATIENT accounts — used in permanent "My TBhon QR". Null for STAFF/ADMIN. */
+  patientPublicCode String? @unique @map("patient_public_code") @db.VarChar(32)
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
@@ -94,6 +96,11 @@ model UserProfile {
   street    String?  @db.VarChar(255)
   barangay  String?  @db.VarChar(100)
   city      String?  @db.VarChar(100)
+  emergencyContactName     String?  @map("emergency_contact_name") @db.VarChar(100)
+  emergencyContactPhone    String?  @map("emergency_contact_phone") @db.VarChar(30)
+  emergencyContactRelation String?  @map("emergency_contact_relation") @db.VarChar(60)
+  governmentIdType         String?  @map("government_id_type") @db.VarChar(50)
+  governmentIdNumber       String?  @map("government_id_number") @db.VarChar(100)
 
   user User @relation(fields: [userId], references: [userId], onDelete: Cascade)
 

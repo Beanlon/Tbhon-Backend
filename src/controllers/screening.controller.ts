@@ -242,7 +242,7 @@ export async function requestIotCapture(req: AuthRequest, res: Response) {
     throw new HttpError(400, "Request body is required");
   }
   const command = parseDeviceCommand(req.body.command) ?? parseDeviceCommand(req.body.type);
-  if (!command || command === "audio upload") {
+  if (!command || command === "audio upload" || command === "setup check") {
     throw new HttpError(400, "command must be `image` or `audio`");
   }
 
@@ -846,4 +846,116 @@ export async function updateScreeningReferral(req: AuthRequest, res: Response) {
   });
 
   res.json({ ok: true, referral: updated });
+}
+
+/**
+ * POST /screenings/:sessionId/link-patient — staff links an existing PATIENT account to a
+ * draft screening session before or after screening (e.g. returning patient flow).
+ * Body: { patientPublicCode } or { email }
+ */
+export async function linkPatientToSession(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+  if (!isRecord(req.body)) throw new HttpError(400, "Request body is required");
+
+  const code = getString(req.body.patientPublicCode)?.trim();
+  const email = getString(req.body.email)?.trim().toLowerCase();
+  if (!code && !email) throw new HttpError(400, "patientPublicCode or email is required");
+
+  // Verify staff owns the session
+  const session = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+  });
+  if (!session) throw new HttpError(404, "Screening session not found");
+
+  // Resolve PATIENT user
+  const patientSelect = {
+    userId: true,
+    role: true,
+    phoneNumber: true,
+    profile: {
+      select: {
+        firstName: true,
+        lastName: true,
+        birthdate: true,
+        gender: true,
+        street: true,
+        barangay: true,
+        city: true,
+        emergencyContactName: true,
+        emergencyContactPhone: true,
+        emergencyContactRelation: true,
+      },
+    },
+  } as const;
+  const patient = code
+    ? await prisma.user.findFirst({
+        where: { role: "PATIENT", patientPublicCode: code },
+        select: patientSelect,
+      })
+    : await prisma.user.findFirst({
+        where: { email: email!, role: "PATIENT" },
+        select: patientSelect,
+      });
+  if (!patient) {
+    throw new HttpError(404, "No patient account found with that code or email");
+  }
+
+  const now = new Date();
+  await prisma.$transaction(async (tx) => {
+    await tx.screeningSession.update({
+      where: { sessionId },
+      data: {
+        patientUserId: patient.userId,
+        patientClaimedAt: now,
+      },
+    });
+
+    if (patient.profile) {
+      await tx.screeningClient.upsert({
+        where: { sessionId },
+        create: {
+          sessionId,
+          firstName: patient.profile.firstName,
+          middleName: null,
+          lastName: patient.profile.lastName,
+          birthdate: patient.profile.birthdate,
+          gender: patient.profile.gender,
+          street: patient.profile.street,
+          barangay: patient.profile.barangay,
+          city: patient.profile.city,
+          contactNumber: patient.phoneNumber ?? "",
+          emergencyContactName: patient.profile.emergencyContactName,
+          emergencyContactPhone: patient.profile.emergencyContactPhone,
+          emergencyContactRelation: patient.profile.emergencyContactRelation,
+          governmentIdType: null,
+          governmentIdNumber: null,
+        },
+        update: {
+          firstName: patient.profile.firstName,
+          middleName: null,
+          lastName: patient.profile.lastName,
+          birthdate: patient.profile.birthdate,
+          gender: patient.profile.gender,
+          street: patient.profile.street,
+          barangay: patient.profile.barangay,
+          city: patient.profile.city,
+          contactNumber: patient.phoneNumber ?? "",
+          emergencyContactName: patient.profile.emergencyContactName,
+          emergencyContactPhone: patient.profile.emergencyContactPhone,
+          emergencyContactRelation: patient.profile.emergencyContactRelation,
+          governmentIdType: null,
+          governmentIdNumber: null,
+        },
+      });
+    }
+  });
+
+  res.json({
+    ok: true,
+    sessionId,
+    patientUserId: patient.userId,
+    name: patient.profile ? `${patient.profile.firstName} ${patient.profile.lastName}` : null,
+  });
 }
