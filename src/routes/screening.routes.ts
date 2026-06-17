@@ -5,6 +5,7 @@ import {
   createDraftScreening,
   deleteIncompleteScreening,
   exportMyScreenings,
+  finalizeScreeningSputum,
   getIotDeviceStatus,
   getMyScreening,
   getPatientAccessForSession,
@@ -45,6 +46,7 @@ screeningRouter.get("/export", requireAuth, requireEmailVerified, exportMyScreen
 screeningRouter.delete("/:sessionId", ...staffScreening, deleteIncompleteScreening);
 screeningRouter.put("/:sessionId/client", ...staffScreening, upsertScreeningClient);
 screeningRouter.patch("/:sessionId/referral", ...staffScreening, updateScreeningReferral);
+screeningRouter.patch("/:sessionId/finalize-sputum", ...staffScreening, finalizeScreeningSputum);
 screeningRouter.get("/:sessionId/patient-access", ...staffScreening, getPatientAccessForSession);
 screeningRouter.post("/:sessionId/link-patient", ...staffScreening, linkPatientToSession);
 screeningRouter.get("/:sessionId/patient-recovery", ...staffScreening, getPatientRecoveryForSession);

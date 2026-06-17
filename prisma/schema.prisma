@@ -120,6 +120,16 @@ model ScreeningSession {
   checklistPayload     Json?     @map("checklist_payload")
   /** Staff-documented reason when sputum smear was skipped (audit trail). */
   sputumSkipReason     String?   @map("sputum_skip_reason") @db.VarChar(255)
+  /** Two-phase screening: "preliminary" (cough + checklist saved, smear to follow) or "final". */
+  resultStage          String    @default("final") @map("result_stage") @db.VarChar(20)
+  /** True while a preliminary result is waiting for the sputum smear to be captured/analyzed later. */
+  awaitingSputum       Boolean   @default(false) @map("awaiting_sputum")
+  /** Staff-documented reason the smear is being analyzed later (required for preliminary save). */
+  sputumDeferReason    String?   @map("sputum_defer_reason") @db.VarChar(255)
+  /** Risk level recorded at preliminary save — kept so the final result can show "was X → now Y". */
+  preliminaryRiskLevel String?   @map("preliminary_risk_level") @db.VarChar(50)
+  /** When the smear was added later and the session was finalized. */
+  sputumFinalizedAt    DateTime? @map("sputum_finalized_at")
   /** Optional booth staff notes for this session. */
   staffNotes           String?   @map("staff_notes") @db.Text
   /** When staff confirmed before releasing the result screen. */

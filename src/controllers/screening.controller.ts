@@ -316,6 +316,14 @@ export async function completeScreening(req: AuthRequest, res: Response) {
   const staffNotes = getString(req.body.staffNotes);
   const staffResultConfirmed = getBool(req.body.staffResultConfirmed);
 
+  // Two-phase screening: a preliminary save records cough + checklist now and
+  // leaves the sputum smear to be captured/analyzed later in the same session.
+  const isPreliminary =
+    getBool(req.body.awaitingSputum) ||
+    (getString(req.body.resultStage) ?? "").trim().toLowerCase() === "preliminary";
+  const resultStage = isPreliminary ? "preliminary" : "final";
+  const sputumDeferReason = getString(req.body.sputumDeferReason);
+
   const draftSessionId = getString(req.body.sessionId);
   let sessionId: string;
   let completingDraft = false;
@@ -356,8 +364,12 @@ export async function completeScreening(req: AuthRequest, res: Response) {
               : null,
           uploadError,
           apiAttempt: apiAttemptRaw ?? "mobile-draft",
+          resultStage,
+          awaitingSputum: isPreliminary,
+          ...(isPreliminary ? { preliminaryRiskLevel: riskLevel } : {}),
           ...(checklistPayload !== undefined ? { checklistPayload } : {}),
           ...(sputumSkipReason ? { sputumSkipReason } : {}),
+          ...(sputumDeferReason ? { sputumDeferReason } : {}),
           ...(staffNotes ? { staffNotes } : {}),
           ...(staffResultConfirmed ? { staffResultConfirmedAt: new Date() } : {}),
         },
@@ -381,8 +393,12 @@ export async function completeScreening(req: AuthRequest, res: Response) {
               : null,
           uploadError,
           apiAttempt: apiAttemptRaw ?? null,
+          resultStage,
+          awaitingSputum: isPreliminary,
+          ...(isPreliminary ? { preliminaryRiskLevel: riskLevel } : {}),
           ...(checklistPayload !== undefined ? { checklistPayload } : {}),
           ...(sputumSkipReason ? { sputumSkipReason } : {}),
+          ...(sputumDeferReason ? { sputumDeferReason } : {}),
           ...(staffNotes ? { staffNotes } : {}),
           ...(staffResultConfirmed ? { staffResultConfirmedAt: new Date() } : {}),
           symptomResponses: { create: symptomCreates },
@@ -570,6 +586,113 @@ export async function completeScreening(req: AuthRequest, res: Response) {
   res.status(201).json({ session, patientAccess });
 }
 
+/**
+ * PATCH /screenings/:sessionId/finalize-sputum — add the sputum smear later to a
+ * preliminary session and re-fuse the risk into a final result (two-phase flow).
+ */
+export async function finalizeScreeningSputum(req: AuthRequest, res: Response) {
+  const userId = authenticatedUserId(req);
+  const sessionId = getString(req.params.sessionId);
+  if (!sessionId) throw new HttpError(400, "sessionId is required");
+  if (!isRecord(req.body)) throw new HttpError(400, "Request body is required");
+
+  const session = await prisma.screeningSession.findFirst({
+    where: { sessionId, userId },
+    include: {
+      result: { select: { resultId: true } },
+      sputumImage: { select: { imageId: true, byteSize: true } },
+    },
+  });
+  if (!session) throw new HttpError(404, "Screening session not found");
+  if (!session.result) throw new HttpError(409, "Screening has no preliminary result yet");
+
+  const riskLevel = coerceRiskLevel(req.body.riskLevel ?? req.body.risk);
+  const rec = getString(req.body.recommendation);
+  const recommendation = rec ?? RISK_FALLBACK_REC[riskLevel];
+  const averageTbProbability = getOptionalNumber(req.body.averageTbProbability ?? req.body.probTb);
+
+  const phlegmAnalyzed = getBool(req.body.phlegmAnalyzed);
+  const phlegmLoad = getString(req.body.phlegmLoad) ?? "";
+  const phlegmConfidence = getOptionalNumber(req.body.phlegmConfidence);
+  const phlegmProbs = parsePhlegmProbs(req.body.phlegmProbs);
+  const imageUri = getString(req.body.imageUri);
+  const staffNotes = getString(req.body.staffNotes);
+  const staffResultConfirmed = getBool(req.body.staffResultConfirmed);
+
+  await prisma.$transaction(async (tx: PrismaTransaction) => {
+    const existingSputum = await tx.sputumImage.findUnique({
+      where: { sessionId },
+      select: { imageId: true, byteSize: true },
+    });
+    let imageIdForPhlegm: string | null = existingSputum?.imageId ?? null;
+    const hasStoredSputumBytes =
+      typeof existingSputum?.byteSize === "number" && existingSputum.byteSize > 0;
+
+    if (imageUri && imageUri.length > 0 && isPhoneLocalMediaUri(imageUri) && !hasStoredSputumBytes) {
+      const mimeType = inferMime(imageUri, "audio/wav", "image/jpeg");
+      if (existingSputum) {
+        await tx.sputumImage.update({
+          where: { sessionId },
+          data: { fileUri: imageUri, mimeType, source: "mobile" },
+        });
+      } else {
+        imageIdForPhlegm = randomUUID();
+        await tx.sputumImage.create({
+          data: { imageId: imageIdForPhlegm, sessionId, fileUri: imageUri, mimeType, source: "mobile" },
+        });
+      }
+    }
+
+    if (imageIdForPhlegm && phlegmAnalyzed && phlegmLoad.length > 0) {
+      await tx.phlegmPrediction.deleteMany({ where: { imageId: imageIdForPhlegm } });
+      await tx.phlegmPrediction.create({
+        data: {
+          phlegmPredictionId: randomUUID(),
+          imageId: imageIdForPhlegm,
+          predictedLoad: phlegmLoad,
+          confidence: phlegmConfidence !== null ? phlegmConfidence : 0,
+          ...(phlegmProbs !== undefined ? { probabilitiesJson: phlegmProbs } : {}),
+          checkpoint: null,
+        },
+      });
+    }
+
+    const referralStatus = referralStatusForRisk(riskLevel);
+    await tx.screeningResult.update({
+      where: { sessionId },
+      data: {
+        riskLevel,
+        recommendation,
+        referralStatus,
+        referralUpdatedAt: referralStatus !== "none" ? new Date() : null,
+      },
+    });
+
+    await tx.screeningSession.update({
+      where: { sessionId },
+      data: {
+        resultStage: "final",
+        awaitingSputum: false,
+        sputumFinalizedAt: new Date(),
+        finalRiskLevel: riskLevel,
+        ...(averageTbProbability !== null ? { averageTbProbability } : {}),
+        ...(staffNotes ? { staffNotes } : {}),
+        ...(staffResultConfirmed ? { staffResultConfirmedAt: new Date() } : {}),
+      },
+    });
+  });
+
+  const updated = await prisma.screeningSession.findUnique({
+    where: { sessionId },
+    include: {
+      result: true,
+      sputumImage: { select: { imageId: true, mimeType: true, byteSize: true } },
+    },
+  });
+
+  res.json({ ok: true, session: updated });
+}
+
 /** DELETE /screenings/:sessionId — remove an incomplete session (no results / risk yet). */
 export async function deleteIncompleteScreening(req: AuthRequest, res: Response) {
   const userId = authenticatedUserId(req);
@@ -619,6 +742,11 @@ export async function listMyScreenings(req: AuthRequest, res: Response) {
       finalRiskLevel: true,
       averageTbProbability: true,
       uploadError: true,
+      resultStage: true,
+      awaitingSputum: true,
+      sputumDeferReason: true,
+      preliminaryRiskLevel: true,
+      sputumFinalizedAt: true,
       result: {
         select: {
           riskLevel: true,
